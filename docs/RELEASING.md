@@ -85,8 +85,20 @@ Old versions are kept. Deleting one is a manual `git rm` on `gh-pages`; the next
 The merged image is served from `gh-pages` rather than linked to the release asset so that the
 binary is same-origin with the page and no CORS header is involved.
 
-**One-time setup:** Settings → Pages → *Deploy from a branch* → `gh-pages` / `/ (root)`. The first
-release creates the branch.
+**One-time setup, and the order matters.** The `gh-pages` branch does not exist until a release
+creates it, and GitHub will not offer a branch that is not there — so the Pages setting cannot be
+made first. Cut the first release, then go to Settings → Pages → *Deploy from a branch* →
+`gh-pages` / `/ (root)`. The release before that one publishes its artefacts normally; only the
+flashing page waits for the setting.
+
+If you would rather have the setting in place beforehand, push an empty branch and select it:
+
+```bash
+git switch --orphan gh-pages && git commit -q --allow-empty -m "init pages" \
+  && git push -u origin gh-pages && git switch master
+```
+
+The release script fetches an existing branch and writes into it, so an empty one is fine.
 
 The page's only remote dependency is the ESP Web Tools module, pinned to an exact version on
 unpkg. That is the single documented exception to the project's no-CDN rule (the device's own UI
