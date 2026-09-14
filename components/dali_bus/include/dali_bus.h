@@ -76,6 +76,16 @@ esp_err_t dali_bus_get_gears(gw_gear_t *out, size_t max, size_t *count);
 /** @brief Update the cached friendly name after app_config persisted it. */
 esp_err_t dali_bus_set_gear_name(uint8_t addr, const char *name);
 
+/* --- listen mode (M5) -------------------------------------------------------------------------
+ * Passive reception is a diagnostic and integration mode, not the normal state: it keeps the RMT
+ * receiver armed whenever the bus task is idle, and every observed frame is published.
+ */
+
+/** @brief Turn passive listening on or off. Safe to call while an operation is running. */
+esp_err_t dali_bus_listen_set(bool enable);
+
+bool dali_bus_listen_active(void);
+
 /* --- name tables ----------------------------------------------------------------------------
  * DALI opcode knowledge lives here, not in gw_api: the wire schema carries names as strings and
  * this component resolves them.

@@ -10,6 +10,7 @@ esp_err_t http_route_bus_cancel(httpd_req_t *req);
 esp_err_t http_route_bus_check(httpd_req_t *req);
 esp_err_t http_route_bus_raw(httpd_req_t *req);
 esp_err_t http_route_bus_query(httpd_req_t *req);
+esp_err_t http_route_bus_monitor(httpd_req_t *req);
 
 esp_err_t http_route_gears_get(httpd_req_t *req);
 esp_err_t http_route_gear_get(httpd_req_t *req);

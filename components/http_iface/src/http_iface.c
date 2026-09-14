@@ -220,6 +220,7 @@ esp_err_t http_iface_init(void)
     static const route_handler_t ctx_http_route_bus_check = {http_route_bus_check};
     static const route_handler_t ctx_http_route_bus_raw = {http_route_bus_raw};
     static const route_handler_t ctx_http_route_bus_query = {http_route_bus_query};
+    static const route_handler_t ctx_http_route_bus_monitor = {http_route_bus_monitor};
     static const route_handler_t ctx_http_route_gears_get = {http_route_gears_get};
     static const route_handler_t ctx_http_route_gear_post = {http_route_gear_post};
     static const route_handler_t ctx_http_route_group_post = {http_route_group_post};
@@ -297,6 +298,10 @@ esp_err_t http_iface_init(void)
          .method = HTTP_POST,
          .handler = authed,
          .user_ctx = (void *)&ctx_http_route_bus_query},
+        {.uri = "/api/bus/monitor",
+         .method = HTTP_POST,
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_monitor},
         {.uri = "/api/gears",
          .method = HTTP_GET,
          .handler = authed,

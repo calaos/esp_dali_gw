@@ -1,6 +1,7 @@
 /** esp-mqtt adapter: client lifecycle, topic routing, LWT, retained state and Home Assistant
  * discovery (SPEC 8). */
 #include <stdlib.h>
+#include <inttypes.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -56,6 +57,7 @@ typedef enum {
     WORK_GEAR,
     WORK_RESULT,
     WORK_PROGRESS,
+    WORK_RX,
     WORK_LOG,
 } work_kind_t;
 
@@ -70,6 +72,7 @@ typedef struct {
         gw_event_gear_t gear;
         gw_event_result_t result;
         gw_event_progress_t progress;
+        gw_event_rx_t rx;
         gw_event_log_t log;
     } u;
 } work_t;
@@ -1063,6 +1066,20 @@ static void handle_work(work_t *w)
             }
             break;
         }
+        case WORK_RX: {
+            char topic[TOPIC_LEN];
+            snprintf(topic, sizeof(topic), "%s/event/rx", s_base);
+            cJSON *obj = cJSON_CreateObject();
+            if (obj != NULL) {
+                char hex[9];
+                snprintf(hex, sizeof(hex), "%0*" PRIX32, w->u.rx.bits / 4, w->u.rx.frame);
+                cJSON_AddStringToObject(obj, "frame", hex);
+                cJSON_AddNumberToObject(obj, "bits", w->u.rx.bits);
+                cJSON_AddNumberToObject(obj, "ts", (double)(w->u.rx.timestamp_us / 1000));
+            }
+            publish_json(topic, obj, false);
+            break;
+        }
         case WORK_PROGRESS: {
             char topic[TOPIC_LEN];
             snprintf(topic, sizeof(topic), "%s/event/progress", s_base);
@@ -1243,6 +1260,12 @@ static void gw_event_handler(void *arg, esp_event_base_t base, int32_t id, void 
         case GW_EVENT_PROGRESS:
             w.kind = WORK_PROGRESS;
             w.u.progress = *(const gw_event_progress_t *)data;
+            break;
+        case GW_EVENT_RX:
+            /* Bus traffic can be dense; the work queue dropping one is preferable to stalling the
+             * driver's listener task, which is what feeds it. */
+            w.kind = WORK_RX;
+            w.u.rx = *(const gw_event_rx_t *)data;
             break;
         case GW_EVENT_LOG:
             if (!log_rate_allow()) {

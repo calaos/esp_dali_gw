@@ -39,6 +39,8 @@ typedef enum {
     GW_EVENT_OTA,
     /** The factory-reset button is being held. Payload: gw_event_factory_reset_t. */
     GW_EVENT_FACTORY_RESET_HOLD,
+    /** A frame was observed on the bus while listening. Payload: gw_event_rx_t. */
+    GW_EVENT_RX,
 } gw_event_id_t;
 
 /** Mirrors the boot state machine of SPEC 5.1; duplicated here so status_led need not know
@@ -100,6 +102,12 @@ typedef struct {
     uint16_t held_ms;
     bool triggered;
 } gw_event_factory_reset_t;
+
+typedef struct {
+    uint32_t frame; /**< right-aligned */
+    uint8_t bits;   /**< 8, 16 or 24 */
+    int64_t timestamp_us;
+} gw_event_rx_t;
 
 /** @brief Post a POD payload on the default loop. Never blocks: a full loop drops the event. */
 esp_err_t gw_event_post(gw_event_id_t id, const void *payload, size_t size);

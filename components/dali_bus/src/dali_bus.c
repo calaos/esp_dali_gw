@@ -43,6 +43,7 @@ static SemaphoreHandle_t s_registry_lock;
 static dali_bus_config_t s_cfg;
 static bus_ctx_t s_ctx;
 static atomic_bool s_cancel_requested;
+static atomic_bool s_listen_wanted;
 
 /* --- reply plumbing -------------------------------------------------------------------------- */
 
@@ -371,6 +372,49 @@ static void bus_task(void *arg)
             }
         }
     }
+}
+
+/* --- listen mode ------------------------------------------------------------------------------ */
+
+/**
+ * Called from the driver's listener task, not an ISR, but still on the driver's stack: it must do
+ * nothing but hand the frame on. A busy event loop drops it, which is the right trade -- a monitor
+ * that stalls the receiver is worse than a monitor that misses a frame under load.
+ */
+static void on_rx_frame(const dali_rx_frame_t *frame, void *user_data)
+{
+    (void)user_data;
+    const gw_event_rx_t ev = {
+        .frame = frame->frame,
+        .bits = frame->bits,
+        .timestamp_us = frame->timestamp_us,
+    };
+    gw_event_post(GW_EVENT_RX, &ev, sizeof(ev));
+}
+
+esp_err_t dali_bus_listen_set(bool enable)
+{
+    if (s_ctx.master == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (enable == atomic_load(&s_listen_wanted)) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = enable ? dali_master_listen_start(s_ctx.master, on_rx_frame, NULL)
+                           : dali_master_listen_stop(s_ctx.master);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "listen %s failed: %s", enable ? "start" : "stop", esp_err_to_name(err));
+        return err;
+    }
+    atomic_store(&s_listen_wanted, enable);
+    ESP_LOGW(TAG, "passive listening %s", enable ? "on" : "off");
+    return ESP_OK;
+}
+
+bool dali_bus_listen_active(void)
+{
+    return atomic_load(&s_listen_wanted);
 }
 
 /* --- public API ------------------------------------------------------------------------------ */

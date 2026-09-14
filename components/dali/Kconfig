@@ -1,0 +1,71 @@
+menu "DALI Component Configuration"
+
+    comment "Part 101 (Physical Layer / RMT Driver) is always enabled."
+
+    config DALI_LISTEN_TASK_PRIORITY
+        int "Priority of the passive-listening task"
+        default 19
+        range 1 24
+        help
+            The RX channel is only re-armed after this task has decoded the previous capture,
+            and a backward frame may follow a forward frame by as little as 7 Te (~2.9 ms).
+            Subtracting the idle-detection window leaves roughly 1.5 ms to be scheduled, so the
+            task has to sit above the Wi-Fi and lwIP tasks to monitor a bus that another master
+            is querying. Its per-frame work is a few microseconds, so it starves nothing.
+
+            Lower it if you only need to observe forward frames; a missed frame is a gap in the
+            monitor, never a functional failure.
+
+    config DALI_LISTEN_TASK_STACK
+        int "Stack size of the passive-listening task (bytes)"
+        default 3072
+        range 2048 8192
+        help
+            Must also cover whatever the application does in its dali_rx_cb_t callback.
+
+    config DALI_PART102_ENABLED
+        bool "Enable Part 102 — Control Gear (luminaires, drivers)"
+        default y
+        help
+            Include support for IEC 62386-102 control gear: DAPC dimming,
+            scene/group commands, commissioning (binary-search address
+            assignment), and Part 209 DT8 colour control.
+
+            Disable this option if your application only uses Part 103
+            input devices and does not control any luminaires or drivers.
+
+    config DALI_PART209_ENABLED
+        bool "Enable Part 209 — DT8 Colour Control (CCT / RGB / RGBWAF)"
+        default y
+        depends on DALI_PART102_ENABLED
+        help
+            Include IEC 62386-209 (DT8) colour and colour-temperature
+            control helpers (dali_master_set_colour / dali_enable_device_type).
+
+            Requires Part 102 to be enabled. Disable this option if your
+            luminaires are single-channel (DT6 or similar) and do not
+            support colour control.
+
+    config DALI_PART103_ENABLED
+        bool "Enable Part 103 — Input Devices (sensors, push-buttons)"
+        default y
+        help
+            Include support for IEC 62386-103 input devices: commissioning,
+            device-level queries, and instance-level commands.
+
+            Disable this option if your application only controls luminaires
+            and does not use any DALI input devices.
+
+    config DALI_PART303_304_ENABLED
+        bool "Enable Part 303/304 — Occupancy & Light Sensor helpers"
+        default y
+        depends on DALI_PART103_ENABLED
+        help
+            Include IEC 62386-303 (occupancy sensor) and IEC 62386-304
+            (light sensor) convenience wrappers.
+
+            Requires Part 103 to be enabled. Disable this option if you
+            use Part 103 input devices but do not need the occupancy/light
+            sensor helper functions.
+
+endmenu

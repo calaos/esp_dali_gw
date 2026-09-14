@@ -1,4 +1,5 @@
 /** Bus, gear and group routes (SPEC 9), plus the bridge from DALI_GW_EVENT onto the SSE stream. */
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -271,6 +272,30 @@ static esp_err_t route_gear_action(httpd_req_t *req, const char *action,
     return runner(req, &cmd);
 }
 
+/** POST /api/bus/monitor -- turn passive listening on or off (M5). */
+esp_err_t http_route_bus_monitor(httpd_req_t *req)
+{
+    cJSON *root = NULL;
+    if (http_read_json(req, &root) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    const cJSON *enabled = cJSON_GetObjectItem(root, "enabled");
+    if (!cJSON_IsBool(enabled)) {
+        cJSON_Delete(root);
+        return http_send_error(req, GW_ERR_INVALID_ARG, "enabled must be a boolean");
+    }
+    esp_err_t err = dali_bus_listen_set(cJSON_IsTrue(enabled));
+    cJSON_Delete(root);
+
+    if (err != ESP_OK) {
+        return http_send_error(req, gw_api_err_from_esp(err), "could not change listen mode");
+    }
+    cJSON *res = cJSON_CreateObject();
+    cJSON_AddBoolToObject(res, "ok", true);
+    cJSON_AddBoolToObject(res, "listening", dali_bus_listen_active());
+    return http_send_json(req, res);
+}
+
 /** POST /api/gears/<addr>/<action> -- the address is in the path, the arguments in the body. */
 esp_err_t http_route_gear_post(httpd_req_t *req)
 {
@@ -393,6 +418,19 @@ static void on_gw_event(void *arg, esp_event_base_t base, int32_t id, void *data
             };
             strlcpy(res.action, ev->action, sizeof(res.action));
             broadcast("result", gw_api_result_to_json(&res));
+            break;
+        }
+        case GW_EVENT_RX: {
+            const gw_event_rx_t *ev = data;
+            cJSON *obj = cJSON_CreateObject();
+            if (obj != NULL) {
+                char hex[9];
+                snprintf(hex, sizeof(hex), "%0*" PRIX32, ev->bits / 4, ev->frame);
+                cJSON_AddStringToObject(obj, "frame", hex);
+                cJSON_AddNumberToObject(obj, "bits", ev->bits);
+                cJSON_AddNumberToObject(obj, "ts", (double)(ev->timestamp_us / 1000));
+                broadcast("rx", obj);
+            }
             break;
         }
         case GW_EVENT_LOG: {

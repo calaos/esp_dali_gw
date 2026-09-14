@@ -9,38 +9,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.7.19~2
-  espressif/cmake_utilities:
-    component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.1'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 1.1.1
-  espressif/dali:
-    component_hash: 4c166f9d3f44164d993ff6b97ea811f1d9aeb2a79167c730ca849d8ea8f3b3d3
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: '*'
-    - name: idf
-      require: private
-      version: '>=5.5.0'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32
-    - esp32s2
-    - esp32s3
-    - esp32c3
-    - esp32c6
-    - esp32p4
-    - esp32h2
-    version: 1.1.0
   espressif/led_strip:
     component_hash: 28621486f77229aaf81c71f5e15d6fbf36c2949cf11094e07090593e659e7639
     dependencies:
@@ -77,11 +45,10 @@ dependencies:
     version: 6.0.2
 direct_dependencies:
 - espressif/cjson
-- espressif/dali
 - espressif/led_strip
 - espressif/mdns
 - espressif/mqtt
 - idf
-manifest_hash: abb631bcc99b93108f206981e004c24dcbdbbf9cf9775a7aedcecc1cee625323
+manifest_hash: b3c3d80755b3fefc5c5dcfbbd0043bfe9c7f77195cb7de1a6da9a3fc7a8c55e8
 target: esp32c6
 version: 3.0.0
