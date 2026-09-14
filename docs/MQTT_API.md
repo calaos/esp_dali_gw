@@ -2,9 +2,11 @@
 
 > **Milestone status.** Everything on this page is implemented in **M2** unless a row says
 > otherwise. `commission`, `configure`, `set_short_address`, `remove_short_address` and `identify`
-> are accepted and routed in M2 but the bus-side operation lands in **M3**; `color`, `poll_all` and
-> Home Assistant discovery land in **M4**; `event/rx` is **M5 (v2)**.
-> [SPEC.md §8](SPEC.md#8-mqtt-api) remains authoritative for the wire schema.
+> are accepted and routed in M2 but the bus-side operation lands in **M3**; `color` and `poll_all`
+> land in **M4**; `event/rx` is **M5 (v2)**. Home Assistant discovery is implemented in **M4** and
+> has **not been verified against a live Home Assistant or on hardware** — see the section below.
+> [SPEC.md §8](SPEC.md#8-mqtt-api) remains authoritative for the wire schema, with the one
+> documented deviation of [ADR 0005](adr/0005-ha-discovery-template-schema.md).
 
 Base topic `<b>` = `config.mqtt.base_topic` (default `dali_gw/<id>`, where `<id>` is the last three
 bytes of the base MAC in lowercase hex). All payloads are JSON (UTF-8). Every command accepts an
@@ -30,6 +32,7 @@ The client starts only when `mqtt.enabled` is true **and** `mqtt.uri` is non-emp
 | `<b>/event/progress` | no | on each step of a long operation | progress object |
 | `<b>/event/log` | no | on a WARN+ bus log line, **rate limited** | log object |
 | `<b>/event/rx` | no | **M5 (v2)** — passively received frames | `{"frame":"A1F3","bits":16,"ts":…}` |
+| `<prefix>/light/<object_id>/config` | yes | on connect, after a scan or commissioning, on a rename, and when a gear turns up between two scans | Home Assistant discovery document, or an empty payload to remove the entity |
 
 **Log rate limit.** Five messages pass immediately, then one every two seconds. Bus faults arrive in
 bursts — a scan over an unpowered bus produces one line per short address — so the burst makes the
@@ -77,7 +80,7 @@ never published late. The full ring buffer is available on `GET /api/info`.
   "device_types": [6],
   "version": "2.0",
   "level": 128,
-  "level_pct": 50,
+  "level_pct": 51,
   "on": true,
   "status": {
     "raw": 4,
@@ -93,7 +96,9 @@ never published late. The full ring buffer is available on `GET /api/info`.
 }
 ```
 
-A `dt8` block (`caps`, `tc_min`, `tc_max`) is added when the gear reports device type 8. When
+`level_pct` is a linear function of the level *number*, not of luminous flux: level 128 is 51 %,
+not 50 % ([ADR 0003](adr/0003-level-pct-mapping.md)). A `dt8` block (`caps`, `tc_min`, `tc_max`) is
+added when the gear reports device type 8. When
 `QUERY STATUS` went unanswered only `"status": {"raw": null}` is published rather than eight `false`
 bits, which would read as a healthy gear. The `config` and `identity` blocks of §7.3 are part of the
 gear object but are not published on the state topic; read them with `GET /api/gears/{addr}` after a
@@ -284,9 +289,142 @@ tools/mqtt_cli.py watch                      # print everything under <b>/#
 `--username` and `--password` cover the rest, and the exit status is 0 on `"ok": true`, 1 on a
 failed result and 2 on a timeout.
 
+
 ## Home Assistant discovery
 
-Optional, `mqtt.ha_discovery.enabled`. **Not implemented — M4.** The planned layout is
-`<prefix>/light/esp_dali_gw_<id>_<addr>/config` with `schema: json`, `brightness_scale: 254`,
-availability on `<b>/status`, and retained discovery messages removed with an empty payload when a
-gear disappears after a scan. See SPEC §8.4.
+Optional, off by default. `mqtt.ha_discovery.enabled` turns it on and `mqtt.ha_discovery.prefix`
+(default `homeassistant`) says where the documents go. Every gear and group is published as a
+**light**:
+
+| Entity | Config topic | `unique_id` |
+|---|---|---|
+| short address `<addr>` | `<prefix>/light/esp_dali_gw_<id>_<addr>/config` | `esp_dali_gw_<id>_<addr>` |
+| group `<n>` | `<prefix>/light/esp_dali_gw_<id>_g<n>/config` | `esp_dali_gw_<id>_g<n>` |
+
+`<id>` is the same six hex digits as in the default base topic. The documents are **always
+retained**, whatever `mqtt.retain_state` says: Home Assistant reads them when *it* starts, which is
+usually not when the gateway publishes them.
+
+> **Schema.** The documents use Home Assistant's **template** light schema, not the `schema: json`
+> of SPEC §8.4. The JSON schema has no state template, and it commands with its own
+> `state`/`brightness` keys, which `<b>/gear/<addr>/set` does not accept — it would break in both
+> directions. [ADR 0005](adr/0005-ha-discovery-template-schema.md) has the full reasoning.
+
+### The document
+
+A present DT8 gear whose Tc limits have been read, on a gateway at `192.168.1.42`:
+
+```json
+{
+  "schema": "template",
+  "name": "Kitchen ceiling",
+  "unique_id": "esp_dali_gw_a1b2c3_3",
+  "command_topic": "dali_gw/a1b2c3/gear/3/set",
+  "command_on_template": "{% if color_temp is defined %}{\"mirek\": {{ color_temp }}}{% elif red is defined %}{\"rgb\": [{{ [red, 254] | min }}, {{ [green, 254] | min }}, {{ [blue, 254] | min }}]}{% elif brightness is defined %}{\"level\": {{ [brightness, 254] | min }}}{% else %}{\"on\": true}{% endif %}",
+  "command_off_template": "{\"on\": false}",
+  "brightness_template": "{{ value_json.level | default('', true) }}",
+  "state_topic": "dali_gw/a1b2c3/gear/3/state",
+  "state_template": "{% if value_json.on is none %}None{% elif value_json.on %}on{% else %}off{% endif %}",
+  "availability_topic": "dali_gw/a1b2c3/status",
+  "availability_template": "{{ value_json.state }}",
+  "qos": 0,
+  "color_temp_template": "{{ value_json.mirek | default('', true) }}",
+  "min_mireds": 153,
+  "max_mireds": 370,
+  "red_template": "{{ (value_json.rgb | default([]))[0] | default('', true) }}",
+  "green_template": "{{ (value_json.rgb | default([]))[1] | default('', true) }}",
+  "blue_template": "{{ (value_json.rgb | default([]))[2] | default('', true) }}",
+  "device": {
+    "identifiers": ["esp_dali_gw_a1b2c3"],
+    "name": "DALI gateway",
+    "model": "ESP DALI GW",
+    "sw_version": "0.4.0",
+    "configuration_url": "http://192.168.1.42/"
+  }
+}
+```
+
+About 1.3 kB for a DT8 gear, 0.9 kB without colour. Differences for the other cases:
+
+- **Not DT8:** no `color_temp_template`, no mireds, no `red`/`green`/`blue_template`. The entity is
+  on/off + brightness.
+- **DT8 without Tc limits:** `color_temp_template` is published but `min_mireds`/`max_mireds` are
+  not, and Home Assistant applies its own defaults. The limits appear once a deep scan has read
+  `dt8.tc_min`/`tc_max`.
+- **Group:** `command_topic` is `<b>/group/<n>/set` and there is **no** `state_topic` — a DALI group
+  cannot be queried, so SPEC §8.1 has no group state topic and the entity is optimistic in Home
+  Assistant. `brightness_template` is still published, because its presence is what gives the entity
+  a brightness slider.
+- **`name`** is the persisted friendly name, or `Gear <addr>` / `Group <n>` when there is none.
+- **`configuration_url`** is omitted while the device has no IP address.
+
+### Levels, not percentages
+
+`brightness_template` reads `level` and `command_on_template` writes `level`, so the number Home
+Assistant calls brightness **is** the DALI level, 0-254. `level_pct` appears nowhere in a discovery
+document: there is one level mapping on the wire and it is the linear one of
+[ADR 0003](adr/0003-level-pct-mapping.md). Home Assistant's own scale ends at 255, so the command
+template clamps to 254 — dragging a slider to the top gives level 254 and the state comes back 254.
+
+`brightness_scale: 254` from SPEC §8.4 is a JSON-schema option and is not published; the template
+schema has no such option and needs none.
+
+### When the documents are published
+
+| Trigger | What is published |
+|---|---|
+| MQTT connect | every document, after the retained state topics |
+| a scan or commissioning finishes | every document, plus removals |
+| `cmd/rename` | that one gear or group |
+| a gear turns up between two scans | that one gear |
+
+Nothing is published on a level or status change — a discovery document does not depend on the state
+of the gear, and republishing 64 of them every time someone dims a light would be the main MQTT
+traffic on the gateway.
+
+Home Assistant restarting needs nothing from the gateway: the documents are retained and the broker
+replays them. The republish on connect is for the two cases where the broker's copy is wrong or
+gone — a broker that was restarted without a persistent store, and a changed IP address or base
+topic inside the document.
+
+### Removal
+
+A discovery document is removed by publishing an **empty retained payload** to the same config
+topic. This happens when:
+
+- a gear that had an entity is no longer `present` after a scan;
+- a group loses its last known member and its name;
+- `mqtt.ha_discovery.prefix` changes — the old prefix is emptied before the new one is used;
+- `mqtt.ha_discovery.enabled` goes false, which is treated as an empty prefix.
+
+The gateway also runs **one blind removal pass**, over every address and group it has not itself
+advertised, the first time it reconciles after a scan has completed. That is what clears documents
+left retained by a previous run of the gateway; afterwards it knows exactly what it published and
+removes only that. Before the first scan nothing is removed — the registry is empty at boot and a
+gateway that merely rebooted must not drop its own entities.
+
+> Consequence worth knowing: disabling discovery *while the gateway is connected* removes the
+> documents. Disabling it and rebooting does not — the gateway no longer knows what it published.
+> Clear them by re-enabling discovery, letting a scan finish, then disabling it again.
+
+### Known limitations
+
+- **Colour is write-only.** The gear object has no colour readback, so `color_temp_template` and the
+  RGB templates render empty and Home Assistant keeps the value it last sent. The templates are
+  written against `value_json.mirek` and `value_json.rgb` and will start reporting unchanged if the
+  registry ever gains those fields.
+- **One directive per call.** A `/set` payload carries one directive, so a service call that sets
+  colour *and* brightness applies the colour only; the template tests colour first deliberately.
+- **Groups have no state**, are optimistic, and are advertised only once a deep scan has read their
+  membership bits or someone has named the group with `cmd/rename`.
+- **Not verified.** The documents have been checked field by field against the Home Assistant
+  template-light schema and every template has been rendered against real payloads, but no live
+  Home Assistant, broker or gear has been part of that.
+
+## Out of scope
+
+- **Passive listening** and `<b>/event/rx` — **M5 (v2)**. The `espressif/dali` driver has no
+  bus-idle detection and no listen mode, so nothing the gateway did not send is observable today;
+  input devices (Part 103) are polled, not received.
+- Acting as a control *device* (bus slave), multi-bus, and TLS to the local HTTP server (SPEC §1).
+- Home Assistant entities other than lights: no scene, switch or sensor entities are published.

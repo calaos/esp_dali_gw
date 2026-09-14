@@ -1,4 +1,5 @@
-/** esp-mqtt adapter: client lifecycle, topic routing, LWT and retained state (SPEC 8). */
+/** esp-mqtt adapter: client lifecycle, topic routing, LWT, retained state and Home Assistant
+ * discovery (SPEC 8). */
 #include <stdlib.h>
 #include <string.h>
 
@@ -284,6 +285,306 @@ static void publish_all(void)
     publish_gears();
 }
 
+/* --- Home Assistant discovery (SPEC 8.4, ADR 0005) -------------------------------------------- */
+
+#define HA_OBJECT_ID_LEN 32
+#define HA_TOPIC_LEN (APP_CONFIG_NAME_LEN + HA_OBJECT_ID_LEN + 16)
+
+/*
+ * The documents use Home Assistant's *template* light schema rather than the JSON schema named in
+ * SPEC 8.4. The JSON schema has no state_value_template — it expects its own `state`/`brightness`
+ * keys in the state payload and commands with them too, neither of which the gear object and the
+ * /set payload of SPEC 8.1-8.2 use. ADR 0005 has the reasoning; the templates below are the whole
+ * of the mapping. Brightness is the raw DALI level, never level_pct (ADR 0003).
+ */
+#define HA_TPL_STATE                                                                               \
+    "{% if value_json.on is none %}None{% elif value_json.on %}on{% else %}off{% endif %}"
+#define HA_TPL_BRIGHTNESS "{{ value_json.level | default('', true) }}"
+/* The gear object carries no colour readback yet: these render empty, which HA ignores. They are
+ * still what declares colour support, so the controls exist and start reporting for free the day
+ * the registry gains the fields. */
+#define HA_TPL_COLOR_TEMP "{{ value_json.mirek | default('', true) }}"
+#define HA_TPL_RED "{{ (value_json.rgb | default([]))[0] | default('', true) }}"
+#define HA_TPL_GREEN "{{ (value_json.rgb | default([]))[1] | default('', true) }}"
+#define HA_TPL_BLUE "{{ (value_json.rgb | default([]))[2] | default('', true) }}"
+/* The LWT publishes {"state":"offline"} on the status topic, so availability reads one member. */
+#define HA_TPL_AVAILABILITY "{{ value_json.state }}"
+/* One service call is one message, and a /set payload carries one directive (gw_api precedence:
+ * level first). Colour is tested first here so that an explicit colour request is never the one
+ * dropped when HA sends brightness alongside it. */
+#define HA_TPL_COMMAND_ON                                                                          \
+    "{% if color_temp is defined %}{\"mirek\": {{ color_temp }}}"                                  \
+    "{% elif red is defined %}{\"rgb\": [{{ [red, 254] | min }}, {{ [green, 254] | min }}, "       \
+    "{{ [blue, 254] | min }}]}"                                                                    \
+    "{% elif brightness is defined %}{\"level\": {{ [brightness, 254] | min }}}"                   \
+    "{% else %}{\"on\": true}{% endif %}"
+#define HA_TPL_COMMAND_OFF "{\"on\": false}"
+
+/** Prefix the retained documents were published under; empty while discovery is off. */
+static char s_ha_prefix[APP_CONFIG_NAME_LEN];
+static char s_ha_device[24]; /**< "esp_dali_gw_<id>", also the device identifier */
+static uint64_t s_ha_gears;  /**< bit n: a config document is retained for short address n */
+static uint16_t s_ha_groups;
+static bool s_ha_swept;
+
+static void ha_object_id(char *out, size_t len, bool group, uint8_t index)
+{
+    if (s_ha_device[0] == '\0') {
+        char id[8];
+        app_config_device_id(id, sizeof(id));
+        snprintf(s_ha_device, sizeof(s_ha_device), "esp_dali_gw_%s", id);
+    }
+    if (group) {
+        snprintf(out, len, "%s_g%u", s_ha_device, (unsigned)index);
+    } else {
+        snprintf(out, len, "%s_%u", s_ha_device, (unsigned)index);
+    }
+}
+
+/** Discovery is retained whatever mqtt.retain_state says: HA reads it when *it* starts, not us. */
+static void ha_publish_doc(const char *object_id, cJSON *doc)
+{
+    char topic[HA_TOPIC_LEN];
+    snprintf(topic, sizeof(topic), "%s/light/%s/config", s_ha_prefix, object_id);
+    publish_json(topic, doc, true);
+}
+
+static void ha_clear_doc(const char *object_id)
+{
+    char topic[HA_TOPIC_LEN];
+    snprintf(topic, sizeof(topic), "%s/light/%s/config", s_ha_prefix, object_id);
+    if (s_client != NULL && esp_mqtt_client_publish(s_client, topic, "", 0, s_qos, 1) < 0) {
+        ESP_LOGW(TAG, "could not remove %s", topic);
+    }
+}
+
+static cJSON *ha_device_block(void)
+{
+    cJSON *dev = cJSON_CreateObject();
+    if (dev == NULL) {
+        return NULL;
+    }
+    const char *ident = s_ha_device;
+    cJSON_AddItemToObject(dev, "identifiers", cJSON_CreateStringArray(&ident, 1));
+    cJSON_AddStringToObject(dev, "name", app_config_get()->device.name);
+    cJSON_AddStringToObject(dev, "model", "ESP DALI GW");
+    cJSON_AddStringToObject(dev, "sw_version", esp_app_get_description()->version);
+
+    net_wifi_status_t net;
+    net_wifi_get_status(&net);
+    if (net.ip[0] != '\0' && strcmp(net.ip, "0.0.0.0") != 0) {
+        char url[32];
+        snprintf(url, sizeof(url), "http://%s/", net.ip);
+        cJSON_AddStringToObject(dev, "configuration_url", url);
+    }
+    return dev;
+}
+
+/*
+ * DT8 colour type features (Part 209): bit 1 = colour temperature, bits 5..7 = number of RGBWAF
+ * channels. The scan does not read that byte yet, so zero means "unknown" and both are offered.
+ */
+static bool ha_dt8_has_tc(const gw_gear_dt8_t *dt8)
+{
+    return dt8->caps == 0 || (dt8->caps & 0x02) != 0;
+}
+
+static bool ha_dt8_has_rgb(const gw_gear_dt8_t *dt8)
+{
+    return dt8->caps == 0 || ((dt8->caps >> 5) & 0x07) >= 3;
+}
+
+/** @param state_topic  NULL for a group, which has no readback and is optimistic in HA. */
+static cJSON *ha_light_doc(const char *object_id, const char *name, const char *command_topic,
+                           const char *state_topic, const gw_gear_dt8_t *dt8)
+{
+    cJSON *doc = cJSON_CreateObject();
+    if (doc == NULL) {
+        return NULL;
+    }
+    cJSON_AddStringToObject(doc, "schema", "template");
+    cJSON_AddStringToObject(doc, "name", name);
+    cJSON_AddStringToObject(doc, "unique_id", object_id);
+    cJSON_AddStringToObject(doc, "command_topic", command_topic);
+    cJSON_AddStringToObject(doc, "command_on_template", HA_TPL_COMMAND_ON);
+    cJSON_AddStringToObject(doc, "command_off_template", HA_TPL_COMMAND_OFF);
+    /* Present even for a group: it is what gives the entity a brightness slider at all. */
+    cJSON_AddStringToObject(doc, "brightness_template", HA_TPL_BRIGHTNESS);
+    if (state_topic != NULL) {
+        cJSON_AddStringToObject(doc, "state_topic", state_topic);
+        cJSON_AddStringToObject(doc, "state_template", HA_TPL_STATE);
+    }
+
+    char availability[TOPIC_LEN];
+    snprintf(availability, sizeof(availability), "%s/status", s_base);
+    cJSON_AddStringToObject(doc, "availability_topic", availability);
+    cJSON_AddStringToObject(doc, "availability_template", HA_TPL_AVAILABILITY);
+    cJSON_AddNumberToObject(doc, "qos", s_qos);
+
+    if (dt8 != NULL && dt8->supported) {
+        if (ha_dt8_has_tc(dt8)) {
+            cJSON_AddStringToObject(doc, "color_temp_template", HA_TPL_COLOR_TEMP);
+            if (dt8->tc_min_mirek != 0 && dt8->tc_max_mirek != 0) {
+                cJSON_AddNumberToObject(doc, "min_mireds", dt8->tc_min_mirek);
+                cJSON_AddNumberToObject(doc, "max_mireds", dt8->tc_max_mirek);
+            }
+        }
+        if (ha_dt8_has_rgb(dt8)) {
+            cJSON_AddStringToObject(doc, "red_template", HA_TPL_RED);
+            cJSON_AddStringToObject(doc, "green_template", HA_TPL_GREEN);
+            cJSON_AddStringToObject(doc, "blue_template", HA_TPL_BLUE);
+        }
+    }
+    cJSON_AddItemToObject(doc, "device", ha_device_block());
+    return doc;
+}
+
+/**
+ * @brief Publish or remove the document for one gear.
+ *
+ * @param sweep  also remove a document this session never published — see ha_sync().
+ */
+static void ha_sync_gear(uint8_t addr, bool sweep)
+{
+    if (s_ha_prefix[0] == '\0' || addr >= GW_MAX_GEARS) {
+        return;
+    }
+    char object_id[HA_OBJECT_ID_LEN];
+    ha_object_id(object_id, sizeof(object_id), false, addr);
+    const uint64_t bit = 1ULL << addr;
+
+    gw_gear_t gear;
+    if (dali_bus_get_gear(addr, &gear) != ESP_OK || !gear.present) {
+        if (sweep || (s_ha_gears & bit) != 0) {
+            ha_clear_doc(object_id);
+            s_ha_gears &= ~bit;
+        }
+        return;
+    }
+
+    char name[GW_NAME_LEN + 8];
+    if (gear.name[0] != '\0') {
+        strlcpy(name, gear.name, sizeof(name));
+    } else {
+        snprintf(name, sizeof(name), "Gear %u", (unsigned)addr);
+    }
+    char command_topic[TOPIC_LEN];
+    char state_topic[TOPIC_LEN];
+    snprintf(command_topic, sizeof(command_topic), "%s/gear/%u/set", s_base, (unsigned)addr);
+    snprintf(state_topic, sizeof(state_topic), "%s/gear/%u/state", s_base, (unsigned)addr);
+
+    ha_publish_doc(object_id, ha_light_doc(object_id, name, command_topic, state_topic, &gear.dt8));
+    s_ha_gears |= bit;
+}
+
+/** Groups every present gear reports. Zero until a deep scan has read the membership bits. */
+static uint16_t ha_group_members(void)
+{
+    uint16_t mask = 0;
+    for (uint8_t addr = 0; addr < GW_MAX_GEARS; addr++) {
+        gw_gear_t gear;
+        if (dali_bus_get_gear(addr, &gear) == ESP_OK && gear.present && gear.config.valid) {
+            mask |= gear.config.groups;
+        }
+    }
+    return mask;
+}
+
+/** A group is worth an entity once something is known to be in it, or once someone has named it. */
+static void ha_sync_group(uint8_t group, uint16_t members, bool sweep)
+{
+    if (s_ha_prefix[0] == '\0' || group >= GW_MAX_GROUPS) {
+        return;
+    }
+    char object_id[HA_OBJECT_ID_LEN];
+    ha_object_id(object_id, sizeof(object_id), true, group);
+    const uint16_t bit = (uint16_t)(1u << group);
+
+    const char *named = app_config_group_name(group);
+    if (named == NULL && (members & bit) == 0) {
+        if (sweep || (s_ha_groups & bit) != 0) {
+            ha_clear_doc(object_id);
+            s_ha_groups &= (uint16_t)~bit;
+        }
+        return;
+    }
+
+    char name[GW_NAME_LEN + 8];
+    if (named != NULL) {
+        strlcpy(name, named, sizeof(name));
+    } else {
+        snprintf(name, sizeof(name), "Group %u", (unsigned)group);
+    }
+    char command_topic[TOPIC_LEN];
+    snprintf(command_topic, sizeof(command_topic), "%s/group/%u/set", s_base, (unsigned)group);
+
+    ha_publish_doc(object_id, ha_light_doc(object_id, name, command_topic, NULL, NULL));
+    s_ha_groups |= bit;
+}
+
+static void ha_clear_all(void)
+{
+    for (uint8_t addr = 0; addr < GW_MAX_GEARS; addr++) {
+        if ((s_ha_gears & (1ULL << addr)) != 0) {
+            char object_id[HA_OBJECT_ID_LEN];
+            ha_object_id(object_id, sizeof(object_id), false, addr);
+            ha_clear_doc(object_id);
+        }
+    }
+    for (uint8_t group = 0; group < GW_MAX_GROUPS; group++) {
+        if ((s_ha_groups & (1u << group)) != 0) {
+            char object_id[HA_OBJECT_ID_LEN];
+            ha_object_id(object_id, sizeof(object_id), true, group);
+            ha_clear_doc(object_id);
+        }
+    }
+    s_ha_gears = 0;
+    s_ha_groups = 0;
+}
+
+/**
+ * @brief Reconcile every discovery document with the registry.
+ *
+ * Called on connect and after a scan or commissioning — never on a gear state change, which would
+ * republish 64 documents every time someone dims a light. The documents are retained, so an HA
+ * restart needs nothing from us; a broker that lost its retained store, a new IP in
+ * configuration_url and a changed base topic are what the republish on connect is for.
+ */
+static void ha_sync(void)
+{
+    const app_config_t *cfg = app_config_get();
+    const char *prefix = cfg->mqtt.ha_discovery.enabled ? cfg->mqtt.ha_discovery.prefix : "";
+
+    /* A retained document only exists under the prefix it was published with, so a changed — or
+     * switched off — prefix has to be emptied before the new one is adopted, or its entities stay
+     * in Home Assistant for ever. */
+    if (s_ha_prefix[0] != '\0' && strcmp(prefix, s_ha_prefix) != 0) {
+        ha_clear_all();
+        s_ha_swept = false;
+    }
+    strlcpy(s_ha_prefix, prefix, sizeof(s_ha_prefix));
+    if (prefix[0] == '\0') {
+        return;
+    }
+
+    gw_bus_status_t bus;
+    dali_bus_get_status(&bus);
+    /* Documents left retained by a previous boot can only be removed blind, and only once a scan
+     * has established which gears really answer: before that the registry is empty and clearing
+     * every address would drop the entities of a gateway that merely rebooted. Afterwards the
+     * advertised masks are authoritative, so the blind pass runs exactly once. */
+    const bool sweep = !s_ha_swept && bus.last_scan != 0;
+
+    for (uint8_t addr = 0; addr < GW_MAX_GEARS; addr++) {
+        ha_sync_gear(addr, sweep);
+    }
+    const uint16_t members = ha_group_members();
+    for (uint8_t group = 0; group < GW_MAX_GROUPS; group++) {
+        ha_sync_group(group, members, sweep);
+    }
+    s_ha_swept = s_ha_swept || sweep;
+}
+
 /* --- inbound routing ------------------------------------------------------------------------- */
 
 static const char *action_name(gw_cmd_kind_t kind)
@@ -429,6 +730,7 @@ static void cmd_rename(const cJSON *root, uint32_t id)
         if (err == ESP_OK) {
             dali_bus_set_gear_name((uint8_t)a, name->valuestring);
             publish_gear((uint8_t)a);
+            ha_sync_gear((uint8_t)a, false);
             s_gears_dirty = true;
         }
     } else {
@@ -438,6 +740,9 @@ static void cmd_rename(const cJSON *root, uint32_t id)
             return;
         }
         err = app_config_set_group_name((uint8_t)g, name->valuestring);
+        if (err == ESP_OK) {
+            ha_sync_group((uint8_t)g, ha_group_members(), false);
+        }
     }
 
     publish_result("rename", id, err == ESP_OK, gw_api_err_from_esp(err),
@@ -692,8 +997,7 @@ static void on_connected(void)
         }
     }
     publish_all();
-
-    // TODO(M4): Home Assistant discovery when mqtt.ha_discovery.enabled (SPEC 8.4).
+    ha_sync();
 }
 
 /* --- worker task ----------------------------------------------------------------------------- */
@@ -728,6 +1032,11 @@ static void handle_work(work_t *w)
         case WORK_GEAR:
             publish_gear(w->u.gear.addr);
             s_gears_dirty = true;
+            /* A gear that turns up between two scans gets its entity straight away; one that is
+             * already advertised is left alone, so dimming never republishes a document. */
+            if (w->u.gear.addr < GW_MAX_GEARS && (s_ha_gears & (1ULL << w->u.gear.addr)) == 0) {
+                ha_sync_gear(w->u.gear.addr, false);
+            }
             break;
         case WORK_RESULT: {
             gw_result_t res = {0};
@@ -750,6 +1059,7 @@ static void handle_work(work_t *w)
                 publish_every_gear_state();
                 publish_gears();
                 publish_bus();
+                ha_sync();
             }
             break;
         }

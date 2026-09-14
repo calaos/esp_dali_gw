@@ -13,4 +13,5 @@ touches the bus.
 - `mqtt_iface_connected()`
 - `mqtt_iface_publish_all()` — republish the retained status, bus, gears and per-gear state topics.
 
-Functional in **M2**; Home Assistant discovery in **M4**.
+Functional in **M2**; Home Assistant discovery in **M4** — template-schema lights, see
+[ADR 0005](../../docs/adr/0005-ha-discovery-template-schema.md).
