@@ -12,7 +12,9 @@
 #include "gw_api.h"
 #include "http_iface.h"
 #include "net_wifi.h"
+#include "http_bus.h"
 #include "http_routes.h"
+#include "http_sse.h"
 #include "http_util.h"
 #include "webui.h"
 
@@ -66,6 +68,9 @@ static esp_err_t info_get(httpd_req_t *req)
  * Content-Encoding: gzip. The ETag is the bundle build hash: it changes only when an asset changes,
  * which lets a browser keep the whole UI cached across reboots.
  */
+/* Registration of the handler past this limit fails at boot, not at build time. */
+#define HTTP_MAX_HANDLERS 32
+
 #define AP_PORTAL_URL "http://192.168.4.1/"
 
 /** OS connectivity probes. Answering them with a redirect is what pops the captive-portal sheet. */
@@ -161,7 +166,7 @@ esp_err_t http_iface_init(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;
-    cfg.max_uri_handlers = 24;
+    cfg.max_uri_handlers = HTTP_MAX_HANDLERS;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     /* SSE clients hold their socket open; without LRU purge they would starve normal requests. */
     cfg.lru_purge_enable = true;
@@ -196,13 +201,77 @@ esp_err_t http_iface_init(void)
          .method = HTTP_POST,
          .handler = http_route_factory_reset,
          .user_ctx = NULL},
+        {.uri = "/api/events", .method = HTTP_GET, .handler = http_sse_open, .user_ctx = NULL},
+
+        {.uri = "/api/bus", .method = HTTP_GET, .handler = http_route_bus_get, .user_ctx = NULL},
+        {.uri = "/api/bus/scan",
+         .method = HTTP_POST,
+         .handler = http_route_bus_scan,
+         .user_ctx = NULL},
+        {.uri = "/api/bus/commission",
+         .method = HTTP_POST,
+         .handler = http_route_bus_commission,
+         .user_ctx = NULL},
+        {.uri = "/api/bus/cancel",
+         .method = HTTP_POST,
+         .handler = http_route_bus_cancel,
+         .user_ctx = NULL},
+        {.uri = "/api/bus/check",
+         .method = HTTP_POST,
+         .handler = http_route_bus_check,
+         .user_ctx = NULL},
+        {.uri = "/api/bus/raw",
+         .method = HTTP_POST,
+         .handler = http_route_bus_raw,
+         .user_ctx = NULL},
+        {.uri = "/api/bus/query",
+         .method = HTTP_POST,
+         .handler = http_route_bus_query,
+         .user_ctx = NULL},
+
+        {.uri = "/api/gears",
+         .method = HTTP_GET,
+         .handler = http_route_gears_get,
+         .user_ctx = NULL},
+        {.uri = "/api/gears/*/set",
+         .method = HTTP_POST,
+         .handler = http_route_gear_set,
+         .user_ctx = NULL},
+        {.uri = "/api/groups/*/set",
+         .method = HTTP_POST,
+         .handler = http_route_group_set,
+         .user_ctx = NULL},
+        {.uri = "/api/broadcast/set",
+         .method = HTTP_POST,
+         .handler = http_route_broadcast_set,
+         .user_ctx = NULL},
+        {.uri = "/api/gears/*",
+         .method = HTTP_PATCH,
+         .handler = http_route_rename,
+         .user_ctx = NULL},
+        {.uri = "/api/groups/*",
+         .method = HTTP_PATCH,
+         .handler = http_route_rename,
+         .user_ctx = NULL},
+        /* After the more specific per-gear routes so this wildcard cannot shadow them. */
+        {.uri = "/api/gears/*",
+         .method = HTTP_GET,
+         .handler = http_route_gear_get,
+         .user_ctx = NULL},
+
         /* Last: the wildcard would otherwise swallow every GET above it. */
         {.uri = "/*", .method = HTTP_GET, .handler = static_get, .user_ctx = NULL},
     };
+    _Static_assert(sizeof(routes) / sizeof(routes[0]) <= HTTP_MAX_HANDLERS,
+                   "more routes than httpd is configured to hold");
+
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &routes[i]), TAG, "register %s",
                             routes[i].uri);
     }
+
+    ESP_RETURN_ON_ERROR(http_sse_start(s_server), TAG, "sse start");
+    ESP_RETURN_ON_ERROR(http_bus_events_subscribe(), TAG, "event subscribe");
 
     ESP_LOGI(TAG, "http server up on port %d", cfg.server_port);
     return ESP_OK;
@@ -213,6 +282,7 @@ esp_err_t http_iface_stop(void)
     if (s_server == NULL) {
         return ESP_OK;
     }
+    http_sse_stop();
     esp_err_t err = httpd_stop(s_server);
     s_server = NULL;
     return err;
@@ -220,7 +290,5 @@ esp_err_t http_iface_stop(void)
 
 void http_iface_sse_broadcast(const char *event, const char *json)
 {
-    // TODO(M2): fan out to the subscribed /api/events clients, dropping any that would block.
-    (void)event;
-    (void)json;
+    http_sse_broadcast(event, json);
 }
