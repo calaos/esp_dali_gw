@@ -6,6 +6,13 @@ or any broker — and embeds a web UI that scans the bus, commissions short addr
 writes control-gear configuration and sends raw frames, with no cloud, no CDN and no broker
 required. Licensed under Apache-2.0.
 
+## Status
+
+Feature-complete through milestone M5 and **unverified on hardware**: it was developed without a
+board, without a DALI bus and without a broker. Every milestone builds warning-free, the pure-logic
+components are host-tested and the web UI was exercised against a stub gateway, but no control gear
+has ever answered a frame. [docs/TESTING.md](docs/TESTING.md) lists what that leaves open.
+
 ## Warning: the bus needs an external power supply
 
 **The Pico-DALI2 has no DALI bus power supply.** It is a transceiver only. An external DALI PSU
@@ -91,6 +98,8 @@ diagnostics with no network at all.
 - [docs/MQTT_API.md](docs/MQTT_API.md) — topics and payloads
 - [docs/HTTP_API.md](docs/HTTP_API.md) — REST routes and SSE stream
 - [docs/RELEASING.md](docs/RELEASING.md) — cutting a release, artefacts, the browser flasher
+- [docs/TESTING.md](docs/TESTING.md) — **what has never run on hardware**, and in what order to check it
+- [docs/adr/](docs/adr/) — why the design is the way it is, including where it departs from the spec
 
 ## License
 
