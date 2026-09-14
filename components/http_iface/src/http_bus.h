@@ -16,6 +16,8 @@ esp_err_t http_route_gear_get(httpd_req_t *req);
 esp_err_t http_route_gear_set(httpd_req_t *req);
 esp_err_t http_route_group_set(httpd_req_t *req);
 esp_err_t http_route_broadcast_set(httpd_req_t *req);
+esp_err_t http_route_gear_post(httpd_req_t *req);
+esp_err_t http_route_group_post(httpd_req_t *req);
 esp_err_t http_route_rename(httpd_req_t *req);
 
 /** @brief Bridge DALI_GW_EVENT onto the SSE stream. */

@@ -233,13 +233,13 @@ esp_err_t http_iface_init(void)
          .method = HTTP_GET,
          .handler = http_route_gears_get,
          .user_ctx = NULL},
-        {.uri = "/api/gears/*/set",
+        {.uri = "/api/gears/*",
          .method = HTTP_POST,
-         .handler = http_route_gear_set,
+         .handler = http_route_gear_post,
          .user_ctx = NULL},
-        {.uri = "/api/groups/*/set",
+        {.uri = "/api/groups/*",
          .method = HTTP_POST,
-         .handler = http_route_group_set,
+         .handler = http_route_group_post,
          .user_ctx = NULL},
         {.uri = "/api/broadcast/set",
          .method = HTTP_POST,
@@ -264,6 +264,18 @@ esp_err_t http_iface_init(void)
     };
     _Static_assert(sizeof(routes) / sizeof(routes[0]) <= HTTP_MAX_HANDLERS,
                    "more routes than httpd is configured to hold");
+
+    /*
+     * httpd_uri_match_wildcard() only honours a '*' in the final position: anywhere else it is
+     * compared literally, so a template with an inner wildcard silently matches nothing and every
+     * request to it 404s. Catch that here rather than on a bench.
+     */
+    for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
+        const char *star = strchr(routes[i].uri, '*');
+        ESP_RETURN_ON_FALSE(star == NULL || star[1] == '\0', ESP_ERR_INVALID_ARG, TAG,
+                            "route %s has a wildcard that is not in the last position",
+                            routes[i].uri);
+    }
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &routes[i]), TAG, "register %s",

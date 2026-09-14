@@ -15,6 +15,29 @@
 
 /* --- helpers --------------------------------------------------------------------------------- */
 
+/**
+ * Segment following the number in "/api/gears/3/configure", or "" when there is none.
+ *
+ * esp_http_server's wildcard matcher only honours a trailing star, so a template with an inner
+ * wildcard never matches anything. The routes are registered with a trailing wildcard and the
+ * sub-path is dispatched here instead.
+ */
+static const char *uri_action_after(const char *uri, const char *prefix)
+{
+    size_t plen = strlen(prefix);
+    if (strncmp(uri, prefix, plen) != 0) {
+        return "";
+    }
+    const char *p = uri + plen;
+    while (*p >= '0' && *p <= '9') {
+        p++;
+    }
+    if (*p != '/') {
+        return "";
+    }
+    return p + 1;
+}
+
 /** Extract a decimal number from the URI segment after @p prefix. Returns -1 when absent. */
 static int uri_number_after(const char *uri, const char *prefix)
 {
@@ -219,6 +242,66 @@ esp_err_t http_route_broadcast_set(httpd_req_t *req)
 {
     const gw_target_t target = {.type = GW_TARGET_BROADCAST, .addr = 0};
     return route_set(req, target);
+}
+
+/** The per-gear action routes all carry the address in the path and the rest in the body. */
+static esp_err_t route_gear_action(httpd_req_t *req, const char *action,
+                                   esp_err_t (*runner)(httpd_req_t *, gw_cmd_t *))
+{
+    int addr = uri_number_after(req->uri, "/api/gears/");
+    if (addr < 0 || addr >= GW_MAX_GEARS) {
+        return http_send_error(req, GW_ERR_INVALID_ARG, "short address must be 0..63");
+    }
+
+    cJSON *root = NULL;
+    if (http_read_json(req, &root) != ESP_OK) {
+        return ESP_FAIL;
+    }
+    /* The shared parser takes the address from the body, so put the path's address there. */
+    cJSON_DeleteItemFromObject(root, "addr");
+    cJSON_AddNumberToObject(root, "addr", addr);
+
+    gw_cmd_t cmd;
+    char message[96] = {0};
+    esp_err_t err = gw_api_cmd_from_json(action, root, &cmd, message, sizeof(message));
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        return http_send_error(req, GW_ERR_INVALID_ARG, message[0] ? message : "bad payload");
+    }
+    return runner(req, &cmd);
+}
+
+/** POST /api/gears/<addr>/<action> -- the address is in the path, the arguments in the body. */
+esp_err_t http_route_gear_post(httpd_req_t *req)
+{
+    const char *action = uri_action_after(req->uri, "/api/gears/");
+
+    if (strcmp(action, "set") == 0) {
+        return http_route_gear_set(req);
+    }
+    if (strcmp(action, "configure") == 0) {
+        /* configure is a state machine but parks its caller, so it still answers in band. */
+        return route_gear_action(req, "configure", run_sync);
+    }
+    if (strcmp(action, "identify") == 0) {
+        return route_gear_action(req, "identify", run_async);
+    }
+    if (strcmp(action, "address") == 0) {
+        return route_gear_action(req, "set_short_address", run_sync);
+    }
+    if (strcmp(action, "remove_address") == 0) {
+        return route_gear_action(req, "remove_short_address", run_sync);
+    }
+    return http_send_error(req, GW_ERR_NOT_PRESENT, "unknown gear action");
+}
+
+/** POST /api/groups/<n>/set. */
+esp_err_t http_route_group_post(httpd_req_t *req)
+{
+    if (strcmp(uri_action_after(req->uri, "/api/groups/"), "set") != 0) {
+        return http_send_error(req, GW_ERR_NOT_PRESENT, "unknown group action");
+    }
+    return http_route_group_set(req);
 }
 
 /** Renaming is registry and configuration only: it never touches the bus. */
