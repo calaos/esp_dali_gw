@@ -17,6 +17,7 @@
 #include "http_iface.h"
 #include "mqtt_iface.h"
 #include "net_wifi.h"
+#include "ota_validate.h"
 #include "status_led.h"
 
 static const char *TAG = "gw";
@@ -79,6 +80,9 @@ void app_main(void)
     ESP_ERROR_CHECK(net_wifi_init());
     ESP_ERROR_CHECK(http_iface_init());
     ESP_ERROR_CHECK(mqtt_iface_init());
+
+    /* Last: the guard needs every producer of its two conditions already running. */
+    ESP_ERROR_CHECK(ota_validate_init());
 
     ESP_LOGI(TAG, "init complete");
 }
