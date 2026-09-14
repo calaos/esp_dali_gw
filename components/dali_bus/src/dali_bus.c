@@ -205,7 +205,18 @@ static void reject(bus_msg_t *msg, gw_err_t err, const char *message)
 
 static bool is_long_operation(gw_cmd_kind_t kind)
 {
-    return kind == GW_CMD_SCAN || kind == GW_CMD_COMMISSION || kind == GW_CMD_POLL_ALL;
+    return kind == GW_CMD_SCAN || kind == GW_CMD_COMMISSION || kind == GW_CMD_POLL_ALL ||
+           kind == GW_CMD_CONFIGURE || kind == GW_CMD_IDENTIFY;
+}
+
+/**
+ * configure runs as a state machine because a full write is over a hundred frames, but the client
+ * expects the real outcome, not an acknowledgement (SPEC 9 lists it among the synchronous routes).
+ * Its caller is therefore parked until the operation ends instead of being answered up front.
+ */
+static bool holds_caller_until_done(gw_cmd_kind_t kind)
+{
+    return kind == GW_CMD_CONFIGURE;
 }
 
 static void run_command(bus_msg_t *msg)
@@ -227,10 +238,32 @@ static void start_long(bus_msg_t *msg)
 
     registry_lock();
     bus_long_begin(&s_ctx, &msg->cmd, &res);
+    s_ctx.op.reply_handle = NULL;
+    if (res.ok && holds_caller_until_done(msg->cmd.kind)) {
+        s_ctx.op.reply_handle = msg->reply;
+        msg->reply = NULL; /* ownership moves to the operation */
+    }
     registry_unlock();
 
     deliver(msg, &res);
     bus_notify_state(&s_ctx);
+}
+
+/** Hand a finished long operation's result to the caller parked on it, if any. */
+static void finish_long(gw_result_t *res)
+{
+    publish_result(res);
+
+    bus_reply_t *waiter = s_ctx.op.reply_handle;
+    s_ctx.op.reply_handle = NULL;
+    if (waiter != NULL) {
+        waiter->res = *res;
+        memset(res, 0, sizeof(*res));
+        xSemaphoreGive(waiter->done);
+        reply_release(waiter);
+    } else {
+        gw_api_result_free(res);
+    }
 }
 
 /**
@@ -292,8 +325,7 @@ static void bus_task(void *arg)
             registry_unlock();
 
             if (done) {
-                publish_result(&res);
-                gw_api_result_free(&res);
+                finish_long(&res);
                 s_ctx.op.kind = GW_CMD_NONE;
                 atomic_store(&s_cancel_requested, false);
                 bus_notify_state(&s_ctx);
@@ -325,6 +357,7 @@ esp_err_t dali_bus_init(const dali_bus_config_t *cfg)
     s_cfg = *cfg;
 
     memset(&s_ctx, 0, sizeof(s_ctx));
+    s_ctx.identify_blink_ms = s_cfg.identify_blink_ms;
     for (uint8_t i = 0; i < GW_MAX_GEARS; i++) {
         s_ctx.gears[i].addr = i;
     }

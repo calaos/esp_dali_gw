@@ -9,6 +9,8 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "dali_bus.h"
 #include "dali_bus_priv.h"
@@ -93,7 +95,16 @@ static void op_set_level(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
 {
     set_action(res, "set_level");
     if (cmd->args.set_level.has_fade_time) {
-        // TODO(M3): DTR0 = fade_time then STORE DTR AS FADE TIME, before the DAPC frame.
+        /* This stores the gear's fade time, it is not a per-command modifier: the bus has no way
+         * to carry a fade with a DAPC frame. Subsequent level changes fade the same way. */
+        bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, cmd->args.set_level.fade_time, false,
+                    NULL);
+        gw_err_t ferr =
+            bus_transact(ctx, cmd->target, true, DALI_CMD_STORE_DTR_AS_FADE_TIME, true, NULL);
+        if (ferr != GW_OK) {
+            fail(res, ferr, "fade time not stored");
+            return;
+        }
     }
     gw_err_t err = send_level(ctx, cmd->target, cmd->args.set_level.level);
     if (err != GW_OK) {
@@ -280,16 +291,82 @@ static void op_bus_check(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
     cJSON_AddBoolToObject(res->data, "any_reply", answered);
 }
 
-static void op_identify(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
+/*
+ * Re-addressing costs three transactions, not one. The single-transaction rule in CLAUDE.md is
+ * about operations whose length grows with the bus -- scan, commission, configure, all of which are
+ * state machines. A bounded handful of frames, under 200 ms, runs inline.
+ */
+static void op_set_short_address(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
 {
-    set_action(res, "identify");
-    /* TODO(M3): DALI-1 gears ignore this; fall back to a blink sequence run as a long operation
-     * so the bus is not held for identify_blink_ms at a time. */
-    gw_err_t err = bus_transact(ctx, cmd->target, true, OPCODE_IDENTIFY_DEVICE, true, NULL);
-    if (err != GW_OK) {
-        fail(res, err, "identify not sent");
+    set_action(res, "set_short_address");
+
+    uint8_t new_addr = cmd->args.set_short_address.new_addr;
+    if (cmd->target.type != GW_TARGET_SHORT || new_addr >= GW_MAX_GEARS) {
+        fail(res, GW_ERR_INVALID_ARG, "both addresses must be short addresses 0..63");
         return;
     }
+    if (new_addr == cmd->target.addr) {
+        res->ok = true;
+        return;
+    }
+
+    /* Refuse before writing: two gears sharing a short address is not recoverable from the UI. */
+    const gw_target_t probe = {.type = GW_TARGET_SHORT, .addr = new_addr};
+    int reply = DALI_RESULT_NO_REPLY;
+    gw_err_t err = bus_transact(ctx, probe, true, DALI_CMD_QUERY_CONTROL_GEAR, false, &reply);
+    if (err != GW_OK) {
+        fail(res, err, "could not probe the target address");
+        return;
+    }
+    if (DALI_RESULT_IS_VALID(reply)) {
+        fail(res, GW_ERR_ADDRESS_IN_USE, "a gear already answers on that short address");
+        return;
+    }
+
+    bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, (uint8_t)((new_addr << 1) | 1), false, NULL);
+    err = bus_transact(ctx, cmd->target, true, DALI_CMD_STORE_DTR_AS_SHORT_ADDR, true, NULL);
+    if (err != GW_OK) {
+        fail(res, err, "store command not sent");
+        return;
+    }
+
+    reply = DALI_RESULT_NO_REPLY;
+    bus_transact(ctx, probe, true, DALI_CMD_QUERY_CONTROL_GEAR, false, &reply);
+    if (!DALI_RESULT_IS_VALID(reply)) {
+        fail(res, GW_ERR_NO_REPLY, "the gear did not answer on its new address");
+        return;
+    }
+
+    /* Carry the name and cached values across so the UI does not lose the gear it just moved. */
+    gw_gear_t moved = ctx->gears[cmd->target.addr];
+    moved.addr = new_addr;
+    ctx->gears[new_addr] = moved;
+    memset(&ctx->gears[cmd->target.addr], 0, sizeof(gw_gear_t));
+    ctx->gears[cmd->target.addr].addr = cmd->target.addr;
+    bus_notify_gear(cmd->target.addr);
+    bus_notify_gear(new_addr);
+
+    res->ok = true;
+}
+
+static void op_remove_short_address(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
+{
+    set_action(res, "remove_short_address");
+    if (cmd->target.type != GW_TARGET_SHORT) {
+        fail(res, GW_ERR_INVALID_ARG, "target must be a short address");
+        return;
+    }
+
+    bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, 0xFF, false, NULL);
+    gw_err_t err =
+        bus_transact(ctx, cmd->target, true, DALI_CMD_STORE_DTR_AS_SHORT_ADDR, true, NULL);
+    if (err != GW_OK) {
+        fail(res, err, "store command not sent");
+        return;
+    }
+
+    ctx->gears[cmd->target.addr].present = false;
+    bus_notify_gear(cmd->target.addr);
     res->ok = true;
 }
 
@@ -326,15 +403,11 @@ void bus_exec_short(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
         case GW_CMD_BUS_CHECK:
             op_bus_check(ctx, cmd, res);
             break;
-        case GW_CMD_IDENTIFY:
-            op_identify(ctx, cmd, res);
-            break;
-        case GW_CMD_CONFIGURE:
         case GW_CMD_SET_SHORT_ADDRESS:
+            op_set_short_address(ctx, cmd, res);
+            break;
         case GW_CMD_REMOVE_SHORT_ADDRESS:
-            // TODO(M3): DTR0 write, STORE DTR AS ... send-twice, then read back and verify.
-            set_action(res, "unsupported");
-            fail(res, GW_ERR_UNSUPPORTED, "commissioning lands in M3");
+            op_remove_short_address(ctx, cmd, res);
             break;
         case GW_CMD_COLOR:
             // TODO(M4): dali_master_set_color() once the registry knows which gears are DT8.
@@ -355,12 +428,17 @@ void bus_exec_short(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
  * holding the task for its duration would make the UI feel dead and make cancel impossible.
  */
 
+static bool step_scan_deep(bus_ctx_t *ctx, uint8_t addr);
+static void identify_begin(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res);
+static void identify_step(bus_ctx_t *ctx, bool *done, gw_result_t *res);
+
 enum {
     SCAN_PRESENT = 0,
     SCAN_STATUS,
     SCAN_LEVEL,
     SCAN_DEVICE_TYPE,
     SCAN_VERSION,
+    SCAN_DEEP,
     SCAN_SUBSTEP_COUNT,
 };
 
@@ -383,11 +461,20 @@ void bus_long_begin(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
             set_action(res, "poll_all");
             ctx->op.total = GW_MAX_GEARS;
             break;
+        case GW_CMD_CONFIGURE:
+            bus_configure_begin(ctx, cmd, res);
+            if (!res->ok) {
+                ctx->op.kind = GW_CMD_NONE;
+            }
+            return;
+        case GW_CMD_IDENTIFY:
+            identify_begin(ctx, cmd, res);
+            return;
         case GW_CMD_COMMISSION:
-            // TODO(M3): see docs/adr for why this is not the driver's blocking dali_commission().
-            set_action(res, "commission");
-            ctx->op.kind = GW_CMD_NONE;
-            fail(res, GW_ERR_UNSUPPORTED, "commissioning lands in M3");
+            bus_commission_begin(ctx, cmd, res);
+            if (!res->ok) {
+                ctx->op.kind = GW_CMD_NONE;
+            }
             return;
         default:
             ctx->op.kind = GW_CMD_NONE;
@@ -496,7 +583,6 @@ static void step_scan(bus_ctx_t *ctx, bool *done, gw_result_t *res)
             ctx->op.substep = SCAN_VERSION;
             break;
         case SCAN_VERSION:
-        default:
             bus_transact(ctx, target, true, DALI_CMD_QUERY_VERSION, false, &reply);
             if (DALI_RESULT_IS_VALID(reply)) {
                 /* Part 102 encodes the version as major.minor in one byte from IEC 62386-102 ed2.
@@ -505,8 +591,21 @@ static void step_scan(bus_ctx_t *ctx, bool *done, gw_result_t *res)
                 gear->version_minor = (uint8_t)(reply & 0x03);
             }
             bus_notify_gear(addr);
-            ctx->op.cursor++;
-            ctx->op.substep = SCAN_PRESENT;
+            if (ctx->op.deep) {
+                ctx->op.deep_step = 0;
+                ctx->op.scratch = 0;
+                ctx->op.substep = SCAN_DEEP;
+            } else {
+                ctx->op.cursor++;
+                ctx->op.substep = SCAN_PRESENT;
+            }
+            break;
+        case SCAN_DEEP:
+            if (step_scan_deep(ctx, addr)) {
+                bus_notify_gear(addr);
+                ctx->op.cursor++;
+                ctx->op.substep = SCAN_PRESENT;
+            }
             break;
     }
 
@@ -556,8 +655,215 @@ void bus_long_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
         case GW_CMD_POLL_ALL:
             step_poll_all(ctx, done, res);
             break;
+        case GW_CMD_COMMISSION:
+            bus_commission_step(ctx, done, res);
+            break;
+        case GW_CMD_CONFIGURE:
+            bus_configure_step(ctx, done, res);
+            break;
+        case GW_CMD_IDENTIFY:
+            identify_step(ctx, done, res);
+            break;
         default:
             finish(ctx, "unknown", res, done);
             break;
     }
+}
+
+/* --- deep scan ---------------------------------------------------------------------------------
+ *
+ * Memory bank 0 holds the GTIN and serial (IEC 62386-102). READ MEMORY LOCATION auto-increments
+ * DTR0, so a run of bytes costs one transaction each after the initial address load.
+ */
+
+#define BANK0_GTIN_OFFSET 0x03
+#define BANK0_GTIN_BYTES 6
+#define BANK0_SERIAL_OFFSET 0x0B
+#define BANK0_SERIAL_BYTES 4
+
+enum {
+    DEEP_MIN = 0,
+    DEEP_MAX,
+    DEEP_POWER_ON,
+    DEEP_SYSTEM_FAILURE,
+    DEEP_FADE,
+    DEEP_PHYSICAL_MIN,
+    DEEP_GROUPS_LOW,
+    DEEP_GROUPS_HIGH,
+    DEEP_SCENE_FIRST,
+    DEEP_SELECT_BANK = DEEP_SCENE_FIRST + GW_MAX_SCENES,
+    DEEP_GTIN_ADDR,
+    DEEP_GTIN_FIRST,
+    DEEP_SERIAL_ADDR = DEEP_GTIN_FIRST + BANK0_GTIN_BYTES,
+    DEEP_SERIAL_FIRST,
+    DEEP_COUNT = DEEP_SERIAL_FIRST + BANK0_SERIAL_BYTES,
+};
+
+/** @return true when the whole deep sequence for this address is finished. */
+static bool step_scan_deep(bus_ctx_t *ctx, uint8_t addr)
+{
+    gw_gear_t *gear = &ctx->gears[addr];
+    const gw_target_t target = {.type = GW_TARGET_SHORT, .addr = addr};
+    uint8_t step = ctx->op.deep_step;
+    int reply = DALI_RESULT_NO_REPLY;
+
+    if (step >= DEEP_SCENE_FIRST && step < DEEP_SCENE_FIRST + GW_MAX_SCENES) {
+        uint8_t scene = (uint8_t)(step - DEEP_SCENE_FIRST);
+        bus_transact(ctx, target, true, (uint8_t)(DALI_CMD_QUERY_SCENE_LEVEL_0 + scene), false,
+                     &reply);
+        /* 0xFF means the scene is not programmed, which is not the same as level 255. */
+        gear->config.scenes[scene] =
+            DALI_RESULT_IS_VALID(reply) ? (reply == 0xFF ? -1 : (int16_t)reply) : -1;
+        ctx->op.deep_step++;
+        return false;
+    }
+
+    if (step >= DEEP_GTIN_FIRST && step < DEEP_GTIN_FIRST + BANK0_GTIN_BYTES) {
+        bus_transact(ctx, target, true, DALI_CMD_READ_MEMORY_LOCATION, false, &reply);
+        ctx->op.scratch =
+            (ctx->op.scratch << 8) | (DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0);
+        ctx->op.deep_step++;
+        if (ctx->op.deep_step == DEEP_GTIN_FIRST + BANK0_GTIN_BYTES) {
+            snprintf(gear->identity.gtin, sizeof(gear->identity.gtin), "%llu",
+                     (unsigned long long)ctx->op.scratch);
+            ctx->op.scratch = 0;
+        }
+        return false;
+    }
+
+    if (step >= DEEP_SERIAL_FIRST && step < DEEP_COUNT) {
+        bus_transact(ctx, target, true, DALI_CMD_READ_MEMORY_LOCATION, false, &reply);
+        ctx->op.scratch =
+            (ctx->op.scratch << 8) | (DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0);
+        ctx->op.deep_step++;
+        if (ctx->op.deep_step == DEEP_COUNT) {
+            snprintf(gear->identity.serial, sizeof(gear->identity.serial), "%llu",
+                     (unsigned long long)ctx->op.scratch);
+            gear->identity.valid = true;
+            gear->config.valid = true;
+            return true;
+        }
+        return false;
+    }
+
+    switch (step) {
+        case DEEP_MIN:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_MIN_LEVEL, false, &reply);
+            gear->config.min = DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0;
+            break;
+        case DEEP_MAX:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_MAX_LEVEL, false, &reply);
+            gear->config.max = DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0;
+            break;
+        case DEEP_POWER_ON:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_POWER_ON_LEVEL, false, &reply);
+            gear->config.power_on = DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0;
+            break;
+        case DEEP_SYSTEM_FAILURE:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_SYSTEM_FAILURE_LEVEL, false, &reply);
+            gear->config.system_failure = DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0;
+            break;
+        case DEEP_FADE:
+            /* One byte carries both: fade time in the high nibble, fade rate in the low one. */
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_FADE_TIME_RATE, false, &reply);
+            if (DALI_RESULT_IS_VALID(reply)) {
+                gear->config.fade_time = (uint8_t)(reply >> 4);
+                gear->config.fade_rate = (uint8_t)(reply & 0x0F);
+            }
+            break;
+        case DEEP_PHYSICAL_MIN:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_PHY_MIN_LEVEL, false, &reply);
+            gear->config.physical_min = DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0;
+            break;
+        case DEEP_GROUPS_LOW:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_GROUPS_0_7, false, &reply);
+            gear->config.groups = DALI_RESULT_IS_VALID(reply) ? (uint16_t)reply : 0;
+            break;
+        case DEEP_GROUPS_HIGH:
+            bus_transact(ctx, target, true, DALI_CMD_QUERY_GROUPS_8_15, false, &reply);
+            if (DALI_RESULT_IS_VALID(reply)) {
+                gear->config.groups |= (uint16_t)((uint16_t)reply << 8);
+            }
+            break;
+        case DEEP_SELECT_BANK:
+            bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG1, 0, false, NULL);
+            ctx->op.scratch = 0;
+            break;
+        case DEEP_GTIN_ADDR:
+            bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, BANK0_GTIN_OFFSET, false, NULL);
+            break;
+        case DEEP_SERIAL_ADDR:
+            bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, BANK0_SERIAL_OFFSET, false, NULL);
+            ctx->op.scratch = 0;
+            break;
+        default:
+            break;
+    }
+    ctx->op.deep_step++;
+    return false;
+}
+
+/* --- identify blink ----------------------------------------------------------------------------
+ *
+ * A DALI-1 gear has no IDENTIFY DEVICE, so it is identified by making it blink. That is seconds of
+ * wall time, so it runs as a long operation and stays cancellable rather than holding the bus.
+ */
+
+#define IDENTIFY_CYCLES 3
+#define BLINK_SLICE_MS 10
+
+/** True when the gear is known to speak DALI-2, which is what IDENTIFY DEVICE requires. */
+static bool target_is_dali2(const bus_ctx_t *ctx, gw_target_t target)
+{
+    return target.type == GW_TARGET_SHORT && target.addr < GW_MAX_GEARS &&
+           ctx->gears[target.addr].version_major >= 2;
+}
+
+static void identify_begin(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
+{
+    res->id = cmd->id;
+    set_action(res, "identify");
+    ctx->op.target = cmd->target;
+
+    if (target_is_dali2(ctx, cmd->target)) {
+        /* One frame and the gear identifies itself; nothing to run as an operation. */
+        gw_err_t err = bus_transact(ctx, cmd->target, true, OPCODE_IDENTIFY_DEVICE, true, NULL);
+        ctx->op.kind = GW_CMD_NONE;
+        if (err != GW_OK) {
+            fail(res, err, "identify not sent");
+            return;
+        }
+        res->ok = true;
+        return;
+    }
+
+    ctx->op.total = IDENTIFY_CYCLES * 2;
+    ctx->op.cursor = 0;
+    ctx->op.scratch = 0;
+    res->ok = true;
+    res->data = cJSON_CreateObject();
+    if (res->data != NULL) {
+        cJSON_AddBoolToObject(res->data, "started", true);
+    }
+}
+
+static void identify_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
+{
+    if (ctx->op.cancel || ctx->op.cursor >= ctx->op.total) {
+        /* Leave the gear where it was rather than at whichever end of the blink we stopped on. */
+        bus_transact(ctx, ctx->op.target, true, DALI_CMD_RECALL_MAX_LEVEL, false, NULL);
+        finish(ctx, "identify", res, done);
+        return;
+    }
+
+    if ((int64_t)ctx->op.scratch > esp_timer_get_time()) {
+        vTaskDelay(pdMS_TO_TICKS(BLINK_SLICE_MS));
+        return;
+    }
+
+    bool high = (ctx->op.cursor % 2) == 0;
+    bus_transact(ctx, ctx->op.target, true,
+                 high ? DALI_CMD_RECALL_MAX_LEVEL : DALI_CMD_RECALL_MIN_LEVEL, false, NULL);
+    ctx->op.cursor++;
+    ctx->op.scratch = (uint64_t)(esp_timer_get_time() + (int64_t)ctx->identify_blink_ms * 1000);
 }
