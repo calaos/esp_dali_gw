@@ -1,6 +1,7 @@
 /* Minimal esp_err.h for the host test build: gw_api is pure logic and must not need the IDF. */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef int esp_err_t;

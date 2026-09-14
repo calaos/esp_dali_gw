@@ -66,4 +66,4 @@ without parsing the body:
 | everything else | `500 Internal Server Error` |
 
 On a rejected configuration write, `message` is the dotted path of the offending field
-(`"mqtt.uri"`, `"led.brightness"`) so a form can highlight it.
+(`"mqtt.uri"`, `"dali.rx_gpio"`) so a form can highlight it.

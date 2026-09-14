@@ -42,8 +42,14 @@ static const char *TAG = "net";
 /** Inside 1-11, so the SoftAP stays legal under every regulatory domain we may be set to. */
 #define AP_CHANNEL 6
 
-/** app_config has no country field yet; SPEC 5.1 makes FR the default. */
-#define COUNTRY_DEFAULT "FR"
+/** Used when wifi.country is empty: the channels legal in every regulatory domain. */
+#define COUNTRY_WORLD_SAFE "01"
+
+static const char *country_code(void)
+{
+    const char *c = app_config_get()->wifi.country;
+    return c[0] != '\0' ? c : COUNTRY_WORLD_SAFE;
+}
 
 #define SCAN_RECORDS_MAX 32
 #define SCAN_DONE_BIT BIT0
@@ -521,7 +527,7 @@ esp_err_t net_wifi_init(void)
 
     /* The whole configuration lives in app_config; the Wi-Fi NVS copy must never win over it. */
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "wifi storage");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_country_code(COUNTRY_DEFAULT, true), TAG, "country");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_country_code(country_code(), true), TAG, "country");
 
     ESP_RETURN_ON_ERROR(
         esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL), TAG,

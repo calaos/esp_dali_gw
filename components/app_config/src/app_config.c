@@ -1,108 +1,135 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_check.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "sdkconfig.h"
+#include "nvs.h"
 
 #include "app_config.h"
+#include "app_config_logic.h"
 
 static const char *TAG = "cfg";
 
-/** Live configuration. Zeroed until M1 loads the NVS blob, never NULL to the caller. */
+#define CFG_NVS_NAMESPACE "dali_gw"
+#define CFG_NVS_KEY "cfg"
+
+/** Live configuration. Populated by app_config_init(), never NULL to the caller. */
 static app_config_t s_cfg;
+
+static esp_err_t store_load(app_config_t *out)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(CFG_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+    size_t len = sizeof(*out);
+    err = nvs_get_blob(handle, CFG_NVS_KEY, out, &len);
+    nvs_close(handle);
+    if (err == ESP_OK && len != sizeof(*out)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    return err;
+}
+
+static esp_err_t store_save(const app_config_t *cfg)
+{
+    nvs_handle_t handle;
+    ESP_RETURN_ON_ERROR(nvs_open(CFG_NVS_NAMESPACE, NVS_READWRITE, &handle), TAG, "nvs_open");
+
+    /* One blob, one commit. NVS makes a single set+commit atomic, so a power cut mid-write leaves
+     * the previous configuration readable instead of a half-updated struct. */
+    esp_err_t err = nvs_set_blob(handle, CFG_NVS_KEY, cfg, sizeof(*cfg));
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
 
 esp_err_t app_config_init(void)
 {
-    // TODO(M1): open the "dali_gw" namespace, load "cfg", migrate older schemas, fall back to
-    // defaults on a corrupt blob. Until then the device always boots on the defaults.
+    app_config_t loaded;
+    char field[APP_CONFIG_NAME_LEN] = {0};
+
+    esp_err_t err = store_load(&loaded);
+    if (err == ESP_OK) {
+        err = app_config_migrate(&loaded);
+    }
+    if (err == ESP_OK) {
+        err = app_config_validate(&loaded, field, sizeof(field));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "stored config rejected at '%s'", field);
+        }
+    }
+    if (err == ESP_OK) {
+        s_cfg = loaded;
+        ESP_LOGI(TAG, "config loaded (schema %u)", (unsigned)s_cfg.schema);
+        return ESP_OK;
+    }
+
     app_config_defaults(&s_cfg);
-    ESP_LOGW(TAG, "stub store: defaults only, nothing is persisted");
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "no stored config, using defaults");
+    } else {
+        ESP_LOGW(TAG, "config unusable (%s), using defaults", esp_err_to_name(err));
+    }
+    /* ESP_OK on purpose: refusing to boot on a bad blob would leave the device with no web UI and
+     * no way to re-provision it. Nothing is written back either, so the blob stays inspectable. */
     return ESP_OK;
 }
 
 const app_config_t *app_config_get(void)
 {
-    // TODO(M1)
     return &s_cfg;
-}
-
-void app_config_defaults(app_config_t *out)
-{
-    if (out == NULL) {
-        return;
-    }
-    memset(out, 0, sizeof(*out));
-    out->schema = APP_CONFIG_SCHEMA_VERSION;
-
-    char id[8];
-    app_config_device_id(id, sizeof(id));
-
-    strlcpy(out->device.name, "DALI gateway", sizeof(out->device.name));
-    snprintf(out->device.hostname, sizeof(out->device.hostname), "esp-dali-gw-%s", id);
-    strlcpy(out->device.timezone, "Europe/Paris", sizeof(out->device.timezone));
-
-    /* An empty ssid is what sends the boot state machine to AP provisioning (SPEC 5.1). */
-    strlcpy(out->wifi.ap_password, CONFIG_GW_AP_PASSWORD, sizeof(out->wifi.ap_password));
-    out->wifi.fallback_ap_timeout_s = 60;
-
-    out->mqtt.enabled = true;
-    snprintf(out->mqtt.client_id, sizeof(out->mqtt.client_id), "esp-dali-gw-%s", id);
-    snprintf(out->mqtt.base_topic, sizeof(out->mqtt.base_topic), "dali_gw/%s", id);
-    out->mqtt.keepalive_s = 30;
-    out->mqtt.qos = 0;
-    out->mqtt.retain_state = true;
-    strlcpy(out->mqtt.ha_discovery.prefix, "homeassistant", sizeof(out->mqtt.ha_discovery.prefix));
-
-    strlcpy(out->http.auth.username, "admin", sizeof(out->http.auth.username));
-
-    out->dali.tx_gpio = CONFIG_GW_DALI_TX_GPIO;
-    out->dali.rx_gpio = CONFIG_GW_DALI_RX_GPIO;
-    out->dali.poll_interval_s = 30;
-    out->dali.scan_on_boot = true;
-    out->dali.identify_blink_ms = 500;
-
-    out->led.enabled = true;
-    out->led.gpio = CONFIG_GW_LED_GPIO;
-    out->led.brightness = 32;
-}
-
-esp_err_t app_config_validate(const app_config_t *cfg, char *err_field, size_t err_len)
-{
-    // TODO(M1)
-    (void)cfg;
-    if (err_field != NULL && err_len > 0) {
-        err_field[0] = '\0';
-    }
-    return ESP_OK;
 }
 
 esp_err_t app_config_set(const app_config_t *cfg, app_config_impact_t *impact)
 {
-    // TODO(M1)
-    (void)cfg;
     if (impact != NULL) {
         *impact = APP_CONFIG_IMPACT_NONE;
     }
-    return ESP_ERR_NOT_SUPPORTED;
+    if (cfg == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_RETURN_ON_ERROR(app_config_validate(cfg, NULL, 0), TAG, "invalid config");
+
+    app_config_t next = *cfg;
+    next.schema = APP_CONFIG_SCHEMA_VERSION;
+    app_config_impact_t what = app_config_diff_impact(&s_cfg, &next);
+
+    ESP_RETURN_ON_ERROR(store_save(&next), TAG, "persist");
+    s_cfg = next;
+    if (impact != NULL) {
+        *impact = what;
+    }
+    return ESP_OK;
 }
 
 void app_config_merge_secrets(app_config_t *cfg)
 {
-    // TODO(M1)
-    (void)cfg;
-}
-
-void app_config_mask_secrets(app_config_t *cfg)
-{
-    // TODO(M1)
-    (void)cfg;
+    app_config_merge_secrets_from(cfg, &s_cfg);
 }
 
 esp_err_t app_config_factory_reset(void)
 {
-    // TODO(M1)
-    return ESP_ERR_NOT_SUPPORTED;
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(CFG_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK; /* already blank */
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "nvs_open");
+
+    err = nvs_erase_all(handle);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+
+    /* s_cfg is left alone and nothing is re-persisted: the caller reboots into provisioning, and
+     * a re-write here would recreate the namespace we were asked to erase. */
+    return err;
 }
 
 void app_config_device_id(char *out, size_t len)
@@ -115,32 +142,54 @@ void app_config_device_id(char *out, size_t len)
     snprintf(out, len, "%02x%02x%02x", mac[3], mac[4], mac[5]);
 }
 
+static const char *label_get(const app_config_label_t *label)
+{
+    return label->name[0] == '\0' ? NULL : label->name;
+}
+
+static esp_err_t label_set(app_config_label_t *label, const char *name)
+{
+    if (name == NULL) {
+        name = "";
+    }
+    if (strlen(name) >= sizeof(label->name)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (strcmp(label->name, name) == 0) {
+        return ESP_OK; /* no flash write for a rename that changes nothing */
+    }
+
+    app_config_label_t previous = *label;
+    strlcpy(label->name, name, sizeof(label->name));
+    esp_err_t err = store_save(&s_cfg);
+    if (err != ESP_OK) {
+        *label = previous; /* keep RAM and flash telling the same story */
+    }
+    return err;
+}
+
 const char *app_config_gear_name(uint8_t addr)
 {
-    // TODO(M1)
-    (void)addr;
-    return NULL;
+    return addr < APP_CONFIG_MAX_GEARS ? label_get(&s_cfg.gears[addr]) : NULL;
 }
 
 const char *app_config_group_name(uint8_t group)
 {
-    // TODO(M1)
-    (void)group;
-    return NULL;
+    return group < APP_CONFIG_MAX_GROUPS ? label_get(&s_cfg.groups[group]) : NULL;
 }
 
 esp_err_t app_config_set_gear_name(uint8_t addr, const char *name)
 {
-    // TODO(M1)
-    (void)addr;
-    (void)name;
-    return ESP_ERR_NOT_SUPPORTED;
+    if (addr >= APP_CONFIG_MAX_GEARS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return label_set(&s_cfg.gears[addr], name);
 }
 
 esp_err_t app_config_set_group_name(uint8_t group, const char *name)
 {
-    // TODO(M1)
-    (void)group;
-    (void)name;
-    return ESP_ERR_NOT_SUPPORTED;
+    if (group >= APP_CONFIG_MAX_GROUPS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return label_set(&s_cfg.groups[group], name);
 }

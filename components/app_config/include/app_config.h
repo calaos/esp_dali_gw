@@ -9,6 +9,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -51,6 +52,8 @@ typedef struct {
     char password[APP_CONFIG_PASSWORD_LEN];
     app_config_static_ip_t static_ip;
     char ap_password[APP_CONFIG_PASSWORD_LEN];
+    /** ISO 3166-1 alpha-2 regulatory domain. Empty means the world-safe channels 1-11. */
+    char country[3];
     /** Seconds spent in STA_CONNECTING before falling back to AP+STA (SPEC 5.1). */
     uint16_t fallback_ap_timeout_s;
 } app_config_wifi_t;
