@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash esp_dali_gw</title>
+<meta name="description" content="Flash the DALI to MQTT gateway firmware onto an ESP32-C6-Pico straight from the browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%238cd3e7'/><rect y='8' width='16' height='8' fill='%233ab4d7'/></svg>">
+<style>
+/*
+ * A subset of web/src/styles.css: the same tokens, the same three ideas (dark-first, status on a
+ * panel's leading edge, no web fonts). Inlined rather than imported because this page is served
+ * from GitHub Pages, not from the device, and must stay one self-contained file.
+ */
+:root {
+    color-scheme: light dark;
+    --c-brand: #3ab4d7;
+    --c-brand-light: #8cd3e7;
+    --c-bg: #eef2f4;
+    --c-surface: #ffffff;
+    --c-raised: #f7f9fa;
+    --c-border: #ccd5d9;
+    --c-border-strong: #76858b;
+    --c-text: #101619;
+    --c-text-muted: #55646a;
+    --c-accent: #0b7391;
+    --c-accent-hover: #095c74;
+    --c-accent-active: #074a5e;
+    --c-on-accent: #ffffff;
+    --c-ok: #137a52;
+    --c-ok-bg: #dff2e8;
+    --c-warn: #8a5606;
+    --c-warn-bg: #fbeedb;
+    --c-danger: #bf2f28;
+    --c-danger-bg: #fce9e7;
+    --c-offline: #55646a;
+    --c-offline-bg: #e7ecee;
+    --c-busy: #0b7391;
+    --c-busy-bg: #dcf0f6;
+    --c-focus: var(--c-accent);
+    --shadow-1: 0 1px 2px rgb(16 22 25 / 0.08);
+
+    --font-sans: Ubuntu, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'Ubuntu Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    --text-xs: 0.6875rem;
+    --text-sm: 0.8125rem;
+    --text-md: 1rem;
+    --text-lg: 1.1875rem;
+    --text-xl: 1.4375rem;
+    --leading-tight: 1.2;
+    --leading-data: 1.35;
+    --leading-normal: 1.5;
+    --weight-medium: 500;
+    --weight-bold: 700;
+    --tracking-tight: -0.015em;
+    --tracking-wide: 0.09em;
+    --measure: 68ch;
+
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+    --space-12: 3rem;
+    --radius-sm: 4px;
+    --radius-lg: 12px;
+    --radius-pill: 999px;
+    --border: 1px solid var(--c-border);
+    --rail-width: 3px;
+    --control-h: 2.75rem;
+    --page-max: 52rem;
+    --dur-fast: 120ms;
+    --ease-out: cubic-bezier(0.2, 0.8, 0.3, 1);
+    --press-scale: 0.96;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        --c-bg: #0e1214;
+        --c-surface: #171d20;
+        --c-raised: #1f262a;
+        --c-border: #333e43;
+        --c-border-strong: #6b797f;
+        --c-text: #eef3f5;
+        --c-text-muted: #9fb0b6;
+        --c-accent: #45c0e0;
+        --c-accent-hover: #63cbe7;
+        --c-accent-active: #2fa8c9;
+        --c-on-accent: #06181e;
+        --c-ok: #4fc48a;
+        --c-ok-bg: #12281f;
+        --c-warn: #e7a84e;
+        --c-warn-bg: #2b2113;
+        --c-danger: #f0716b;
+        --c-danger-bg: #2e1817;
+        --c-offline: #8d9ca2;
+        --c-offline-bg: #20272a;
+        --c-busy: #45c0e0;
+        --c-busy-bg: #0d2830;
+        /* Depth in dark comes from surface lightness and the hairline, not from a drop shadow. */
+        --shadow-1: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root { --dur-fast: 1ms; --press-scale: 1; }
+    *, *::before, *::after {
+        animation-duration: 1ms !important;
+        transition-duration: 1ms !important;
+    }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--c-bg);
+    color: var(--c-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-md);
+    line-height: var(--leading-normal);
+    -webkit-text-size-adjust: 100%;
+}
+
+h1, h2 { margin: 0; line-height: var(--leading-tight); letter-spacing: var(--tracking-tight); }
+h1 { font-size: var(--text-xl); }
+h2 { font-size: var(--text-lg); }
+p { margin: 0; max-width: var(--measure); }
+ol, ul { margin: 0; padding-left: 1.25em; max-width: var(--measure); }
+li + li { margin-top: var(--space-1); }
+
+a { color: var(--c-accent); text-underline-offset: 2px; }
+
+:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+
+.appbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: var(--border);
+    background: var(--c-surface);
+}
+
+/* Abstracted from the Calaos logotype: letterforms split horizontally into a pale upper half and
+   a saturated lower half. Hard stop, not a gradient wash. */
+.mark {
+    flex: none;
+    width: 0.5rem;
+    height: 1.75rem;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(180deg, var(--c-brand-light) 0 50%, var(--c-brand) 50% 100%);
+}
+
+.appbar h1 { flex: 1 1 auto; font-size: var(--text-lg); }
+
+.page {
+    max-width: var(--page-max);
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-4) var(--space-12);
+}
+
+.stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.stack--tight { gap: var(--space-2); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+
+.panel {
+    position: relative;
+    padding: var(--space-4);
+    border: var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-1);
+}
+
+/* Status lives on the leading edge, never in the fill. */
+.panel--rail { padding-left: calc(var(--space-4) + var(--rail-width)); }
+.panel--rail::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--rail-width);
+    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+    background: var(--rail, var(--c-border-strong));
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--status-bg, var(--c-offline-bg));
+    color: var(--status, var(--c-offline));
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--tracking-wide);
+    line-height: var(--leading-tight);
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.dot { flex: none; width: 0.5rem; height: 0.5rem; border-radius: var(--radius-pill); background: currentColor; }
+
+.is-ok      { --status: var(--c-ok);      --status-bg: var(--c-ok-bg);      --rail: var(--c-ok); }
+.is-warn    { --status: var(--c-warn);    --status-bg: var(--c-warn-bg);    --rail: var(--c-warn); }
+.is-error   { --status: var(--c-danger);  --status-bg: var(--c-danger-bg);  --rail: var(--c-danger); }
+.is-offline { --status: var(--c-offline); --status-bg: var(--c-offline-bg); --rail: var(--c-offline); }
+.is-busy    { --status: var(--c-busy);    --status-bg: var(--c-busy-bg);    --rail: var(--c-busy); }
+
+.muted { color: var(--c-text-muted); }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; line-height: var(--leading-data); }
+.small { font-size: var(--text-sm); }
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: var(--control-h);
+    padding: 0 var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: var(--weight-medium);
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
+.btn--primary { background: var(--c-accent); color: var(--c-on-accent); }
+.btn--primary:hover { background: var(--c-accent-hover); }
+.btn--primary:active { background: var(--c-accent-active); }
+.btn--secondary { border-color: var(--c-border-strong); color: var(--c-text); }
+.btn--secondary:hover { border-color: var(--c-accent); color: var(--c-accent); }
+
+select {
+    min-height: var(--control-h);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--c-surface);
+    color: var(--c-text);
+    font: inherit;
+    font-family: var(--font-mono);
+}
+
+.notice {
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--status-bg, var(--c-offline-bg));
+    color: var(--status, var(--c-text));
+    font-size: var(--text-sm);
+}
+
+.section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); }
+.section__head h2 { flex: 1 1 auto; }
+
+/* Label left, value right — the same readout alignment the device UI uses. */
+.data-list { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-6); margin: 0; }
+.data-list dt { color: var(--c-text-muted); font-size: var(--text-sm); }
+.data-list dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 30rem) {
+    .data-list { grid-template-columns: 1fr; gap: var(--space-1); }
+    .data-list dd { margin-bottom: var(--space-2); }
+}
+
+footer { border-top: var(--border); margin-top: var(--space-8); padding-top: var(--space-4); }
+
+/* Until the module has upgraded the element, none of its slotted children are claimed by a shadow
+   slot, so all three states would render at once. Hide them and show the placeholder instead. */
+esp-web-install-button:not(:defined) > * { display: none; }
+</style>
+</head>
+<body>
+
+<header class="appbar">
+    <span class="mark" aria-hidden="true"></span>
+    <h1>esp_dali_gw</h1>
+    <span class="badge is-busy"><span class="dot"></span>Browser flasher</span>
+</header>
+
+<main class="page stack">
+
+    <section class="panel stack">
+        <div class="section__head">
+            <h2>Flash from the browser</h2>
+            <span class="badge is-offline mono" id="latest-badge">loading</span>
+        </div>
+        <p class="muted">
+            Plug the ESP32-C6-Pico into this computer with a USB-C cable, pick a version and press
+            the button. Nothing is installed on your machine and the firmware never leaves GitHub.
+        </p>
+
+        <div class="row">
+            <label for="version">Version</label>
+            <select id="version" aria-describedby="version-hint"></select>
+            <a id="notes" class="btn btn--secondary" href="#" hidden>Release notes</a>
+        </div>
+        <p id="version-hint" class="muted small">The newest release is selected by default.</p>
+
+        <div class="row">
+            <esp-web-install-button id="installer">
+                <button slot="activate" class="btn btn--primary">Connect and install</button>
+                <span slot="unsupported" class="notice is-error">
+                    This browser cannot talk to a serial port. Use <strong>Chrome</strong> or
+                    <strong>Edge</strong> on a desktop — Firefox and Safari do not implement Web
+                    Serial, and no mobile browser does.
+                </span>
+                <span slot="not-allowed" class="notice is-error">
+                    Web Serial needs a secure context. Open this page over <strong>https</strong>.
+                </span>
+            </esp-web-install-button>
+            <span id="flasher-loading" class="muted small">Loading the flasher…</span>
+        </div>
+        <p id="flasher-offline" class="notice is-warn" hidden>
+            The flasher could not be loaded. Download
+            <span class="mono">esp_dali_gw-merged.bin</span> from the release and write it at offset
+            <span class="mono">0x0</span> with esptool instead.
+        </p>
+        <noscript class="notice is-error">This page needs JavaScript to talk to the board.</noscript>
+    </section>
+
+    <section class="panel panel--rail is-error stack stack--tight">
+        <div class="section__head">
+            <h2>The DALI bus needs its own power supply</h2>
+            <span class="badge is-error">Read first</span>
+        </div>
+        <p>
+            The <strong>Pico-DALI2 has no DALI bus power supply</strong> — it is a transceiver only.
+            An external DALI PSU (<span class="mono">16 V, ≤ 250 mA</span>) must be present on the
+            bus or nothing will ever answer.
+        </p>
+        <p class="muted small">
+            An unpowered bus is a normal, detectable condition, not a fault: the gateway reports
+            <span class="mono">powered: false</span>, blinks the status LED red and keeps running.
+        </p>
+    </section>
+
+    <section class="panel panel--rail is-warn stack stack--tight">
+        <h2>Flashing erases the device</h2>
+        <p>
+            The image is written from offset <span class="mono">0x0</span> and covers the
+            bootloader, the partition table, the app and the configuration area, which comes back
+            blank: Wi-Fi credentials, broker settings, fitting names, groups and scenes all go.
+            The DALI control gear itself is not touched — short addresses, scenes and groups stay
+            programmed in the fittings.
+        </p>
+        <p class="muted small">
+            Updating an already-provisioned gateway? Use the OTA upload in its own web UI with
+            <span class="mono">esp_dali_gw.bin</span> from the release instead; that keeps the
+            configuration.
+        </p>
+    </section>
+
+    <section class="panel stack stack--tight">
+        <h2>What happens on the first boot</h2>
+        <p>With no Wi-Fi credentials stored, the gateway starts its own access point.</p>
+        <dl class="data-list">
+            <dt>Network</dt><dd>ESP-DALI-GW-&lt;id&gt;</dd>
+            <dt>Password</dt><dd>dali12345</dd>
+            <dt>Setup page</dt><dd>http://192.168.4.1/</dd>
+        </dl>
+        <p class="muted small">
+            <span class="mono">&lt;id&gt;</span> is the last three bytes of the MAC in lowercase hex.
+            Any URL redirects to the setup page (captive portal). After provisioning, the gateway
+            joins your network and is reachable at
+            <span class="mono">http://esp-dali-gw-&lt;id&gt;.local/</span>.
+        </p>
+    </section>
+
+    <footer class="row muted small">
+        <a href="https://github.com/calaos/esp_dali_gw">Source</a>
+        <a href="https://github.com/calaos/esp_dali_gw/releases">All releases</a>
+        <a href="https://github.com/calaos/esp_dali_gw/blob/main/docs/HARDWARE.md">Wiring and bus PSU</a>
+        <span>Apache-2.0</span>
+    </footer>
+
+</main>
+
+<!--
+  The only remote dependency on this page. The device's own UI has none and must keep none; this
+  page is on GitHub Pages and esp-web-tools is only distributed as a module on a CDN.
+-->
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<script>
+(function () {
+    const REPO = 'https://github.com/calaos/esp_dali_gw';
+    const select = document.getElementById('version');
+    const installer = document.getElementById('installer');
+    const notes = document.getElementById('notes');
+    const badge = document.getElementById('latest-badge');
+
+    function apply() {
+        const v = select.value;
+        // Relative to this page, so the image is same-origin and no CORS header is involved.
+        installer.manifest = `${v}/manifest.json`;
+        installer.setAttribute('manifest', `${v}/manifest.json`);
+        notes.href = `${REPO}/releases/tag/${v}`;
+        notes.hidden = false;
+    }
+
+    function fail(msg) {
+        badge.textContent = 'unavailable';
+        badge.className = 'badge is-error';
+        select.hidden = true;
+        document.getElementById('version-hint').textContent = msg;
+    }
+
+    fetch('versions.json', { cache: 'no-cache' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+        .then((versions) => {
+            if (!Array.isArray(versions) || versions.length === 0) throw new Error('empty');
+            for (const v of versions) {
+                const opt = document.createElement('option');
+                opt.value = v;
+                opt.textContent = v;
+                select.append(opt);
+            }
+            badge.textContent = `latest ${versions[0]}`;
+            badge.className = 'badge is-ok mono';
+            apply();
+        })
+        .catch(() => fail('No published build was found on this page yet. See the releases page.'));
+
+    select.addEventListener('change', apply);
+
+    // A blocked or unreachable CDN is the one failure this page cannot route around, so say so
+    // rather than leave a button that does nothing.
+    const loading = document.getElementById('flasher-loading');
+    customElements.whenDefined('esp-web-install-button').then(() => { loading.hidden = true; });
+    setTimeout(() => {
+        if (customElements.get('esp-web-install-button')) return;
+        loading.hidden = true;
+        document.getElementById('flasher-offline').hidden = false;
+    }, 8000);
+})();
+</script>
+
+</body>
+</html>

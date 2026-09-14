@@ -1,0 +1,233 @@
+name: release
+
+# ci.yml carries `tags-ignore: ["v*"]`, so this workflow is the only gate a tag passes through:
+# it repeats the lint and host-test jobs rather than assuming the branch build still stands.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release, push gh-pages
+  packages: write # push the toolchain image
+
+# Two tags in flight would race on the gh-pages branch. Never cancel: a half-published release is
+# worse than a slow one.
+concurrency:
+  group: release-pages
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/calaos/esp_dali_gw-toolchain
+
+jobs:
+  # Identical to ci.yml: the tag follows the content hash of .devcontainer/Dockerfile, so a
+  # release either reuses the exact image CI used or builds that same image.
+  toolchain:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          tag="${{ hashFiles('.devcontainer/Dockerfile') }}"
+          echo "tag=$tag"               >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_NAME:$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: probe
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.image }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.probe.outputs.exists == 'false'
+
+      - uses: docker/build-push-action@v6
+        if: steps.probe.outputs.exists == 'false'
+        with:
+          context: .
+          file: .devcontainer/Dockerfile
+          build-args: INSTALL_CLAUDE_CODE=0
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build:
+    needs: toolchain
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      # The runner's workspace is owned by a uid that does not exist in the image.
+      options: --user root
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PROJECT_VER comes from `git describe --tags`; a shallow checkout without tags would
+          # bake a bare commit hash into the image and into /api/info.
+          fetch-depth: 0
+
+      - name: Version
+        id: v
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          described="$(git describe --tags --dirty --always)"
+          if [ "$described" != "$tag" ]; then
+            echo "git describe says '$described' but the tag is '$tag'" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # v1.2.3 is final; anything with a suffix (v1.2.3-rc1) ships as a pre-release.
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Web UI
+        run: |
+          npm --prefix web ci
+          npm --prefix web run lint
+          npm --prefix web run typecheck
+          npm --prefix web run build
+          tools/check-bundle-size.sh
+
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Firmware
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          idf.py set-target esp32c6
+          idf.py build
+          tools/check-app-size.sh
+
+      - name: Package
+        run: tools/package-release.sh "${{ steps.v.outputs.tag }}" dist
+
+      - name: Changelog
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: tools/changelog.sh "${{ steps.v.outputs.tag }}" | tee release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.v.outputs.tag }}
+          path: |
+            dist/
+            release-notes.md
+          retention-days: 14
+
+  host-tests:
+    needs: toolchain
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/host-tests.sh
+
+  lint:
+    needs: toolchain
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          mapfile -t files < <(git ls-files '*.c' '*.h')
+          clang-format --dry-run --Werror "${files[@]}"
+
+  # No build happens below this line, so these jobs run on the bare runner rather than in the
+  # toolchain image: they only move bytes that the container job produced.
+  publish:
+    needs: [build, host-tests, lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ needs.build.outputs.tag }}
+
+      - name: Verify checksums
+        run: cd dist && sha256sum --check SHA256SUMS
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ needs.build.outputs.tag }}" \
+            --verify-tag \
+            --title "${{ needs.build.outputs.tag }}" \
+            --notes-file release-notes.md \
+            ${{ needs.build.outputs.prerelease == 'true' && '--prerelease' || '' }} \
+            dist/esp_dali_gw.bin \
+            dist/bootloader.bin \
+            dist/partition-table.bin \
+            dist/ota_data_initial.bin \
+            dist/esp_dali_gw-merged.bin \
+            dist/manifest.json \
+            dist/SHA256SUMS
+
+      # The flasher page and the merged image live on gh-pages, same origin, so ESP Web Tools
+      # fetches the binary without a CORS round trip through the release asset CDN.
+      - name: Publish the flashing page
+        if: needs.build.outputs.prerelease == 'false'
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # A plain clone of just this branch: `actions/checkout` cannot target a ref that does not
+          # exist yet, and the first release has to create gh-pages.
+          mkdir gh-pages
+          git -C gh-pages init -q -b gh-pages
+          git -C gh-pages remote add origin \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git -C gh-pages fetch -q origin gh-pages; then
+            git -C gh-pages reset -q --hard FETCH_HEAD
+          fi
+
+          tools/publish-pages.sh "$TAG" dist "$PWD/gh-pages"
+
+          git -C gh-pages add -A
+          # Re-running a release must not push an empty commit.
+          if git -C gh-pages diff --cached --quiet; then
+            echo "gh-pages already up to date"
+          else
+            git -C gh-pages commit -q -m "release: $TAG"
+            git -C gh-pages push -q origin gh-pages
+          fi

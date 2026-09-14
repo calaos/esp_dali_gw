@@ -28,6 +28,13 @@ An unpowered bus is a **normal, detectable condition**, not a fault: the firmwar
 All GPIO numbers are Kconfig options with these defaults and are also overridable at runtime in the
 configuration, so the firmware can drive another board or a different transceiver.
 
+## Flash a board
+
+No toolchain needed: open **<https://calaos.github.io/esp_dali_gw/>** in Chrome or Edge, plug the
+board in over USB-C and press the button. Flashing erases the device; an already-provisioned
+gateway is better updated with the OTA upload in its own UI. See
+[docs/RELEASING.md](docs/RELEASING.md).
+
 ## Build and flash
 
 The [devcontainer](.devcontainer/) is the **only supported toolchain**; CI runs the byte-identical
@@ -83,6 +90,7 @@ diagnostics with no network at all.
 - [docs/HARDWARE.md](docs/HARDWARE.md) — pinout, transceiver, bus PSU wiring
 - [docs/MQTT_API.md](docs/MQTT_API.md) — topics and payloads
 - [docs/HTTP_API.md](docs/HTTP_API.md) — REST routes and SSE stream
+- [docs/RELEASING.md](docs/RELEASING.md) — cutting a release, artefacts, the browser flasher
 
 ## License
 
