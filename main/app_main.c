@@ -12,6 +12,7 @@
 #include "nvs_flash.h"
 #include "app_config.h"
 #include "dali_bus.h"
+#include "factory_button.h"
 #include "gw_events.h"
 #include "http_iface.h"
 #include "mqtt_iface.h"
@@ -71,6 +72,8 @@ void app_main(void)
         .identify_blink_ms = cfg->dali.identify_blink_ms,
     };
     ESP_ERROR_CHECK(dali_bus_init(&bus));
+
+    ESP_ERROR_CHECK(factory_button_init());
 
     /* Network last among the producers: the bus must be able to answer before anything can ask. */
     ESP_ERROR_CHECK(net_wifi_init());
