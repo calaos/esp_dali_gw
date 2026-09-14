@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flash esp_dali_gw</title>
-<meta name="description" content="Flash the DALI to MQTT gateway firmware onto an ESP32-C6-Pico straight from the browser.">
+<meta name="description" content="Flash the DALI to MQTT gateway firmware onto an ESP32-C6-Pico or an ESP32-S3-Pico straight from the browser.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%238cd3e7'/><rect y='8' width='16' height='8' fill='%233ab4d7'/></svg>">
 <style>
 /*
@@ -112,6 +112,10 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+
+/* .row and .stack set display, which outranks the UA rule for [hidden]; without this the install
+   button stays on screen for a version that has no build for the selected board. */
+[hidden] { display: none !important; }
 
 body {
     margin: 0;
@@ -273,6 +277,47 @@ select {
 
 footer { border-top: var(--border); margin-top: var(--space-8); padding-top: var(--space-4); }
 
+/* The board is the one choice on this page with a wrong answer, so it is a set of cards rather
+   than a second dropdown: both options stay visible with their specs next to them. */
+.boards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.boards legend { padding: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--c-text-muted); }
+
+.board {
+    position: relative;
+    display: block;
+    padding: var(--space-3);
+    padding-left: calc(var(--space-3) + var(--rail-width));
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--c-raised);
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out);
+}
+.board:hover { border-color: var(--c-accent); }
+/* The same leading-edge marker the rest of the system uses for "this one". */
+.board.is-current {
+    border-color: var(--c-accent);
+    background: var(--c-surface);
+    box-shadow: inset var(--rail-width) 0 0 var(--c-accent);
+}
+.board:has(input:focus-visible) { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+.board input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.board__name { display: block; font-weight: var(--weight-bold); }
+.board__specs {
+    display: block;
+    margin-top: var(--space-1);
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+    line-height: var(--leading-data);
+}
+
 /* Until the module has upgraded the element, none of its slotted children are claimed by a shadow
    slot, so all three states would render at once. Hide them and show the placeholder instead. */
 esp-web-install-button:not(:defined) > * { display: none; }
@@ -294,8 +339,21 @@ esp-web-install-button:not(:defined) > * { display: none; }
             <span class="badge is-offline mono" id="latest-badge">loading</span>
         </div>
         <p class="muted">
-            Plug the ESP32-C6-Pico into this computer with a USB-C cable, pick a version and press
-            the button. Nothing is installed on your machine and the firmware never leaves GitHub.
+            Plug the board into this computer with a USB-C cable, pick which board it is and which
+            version you want, then press the button. Nothing is installed on your machine and the
+            firmware never leaves GitHub.
+        </p>
+
+        <fieldset class="boards" id="boards">
+            <legend>Board</legend>
+        </fieldset>
+
+        <p class="notice is-warn" id="board-warning" hidden>
+            <strong>The two boards look identical.</strong> Same size, same pin header, same
+            Pico-DALI2 on top — only the silkscreen under the module tells them apart. An image
+            built for the other one damages nothing, but the board will not boot. If you pick wrong
+            here the flasher stops with <span class="mono">not supported</span> when it reads the
+            chip, before it writes anything; it is still the one thing worth checking twice.
         </p>
 
         <div class="row">
@@ -305,7 +363,9 @@ esp-web-install-button:not(:defined) > * { display: none; }
         </div>
         <p id="version-hint" class="muted small">The newest release is selected by default.</p>
 
-        <div class="row">
+        <p id="no-build" class="notice is-warn" hidden></p>
+
+        <div class="row" id="install-row">
             <esp-web-install-button id="installer">
                 <button slot="activate" class="btn btn--primary">Connect and install</button>
                 <span slot="unsupported" class="notice is-error">
@@ -321,8 +381,8 @@ esp-web-install-button:not(:defined) > * { display: none; }
         </div>
         <p id="flasher-offline" class="notice is-warn" hidden>
             The flasher could not be loaded. Download
-            <span class="mono">esp_dali_gw-merged.bin</span> from the release and write it at offset
-            <span class="mono">0x0</span> with esptool instead.
+            <span class="mono" id="offline-file">the merged image</span> from the release and write
+            it at offset <span class="mono">0x0</span> with esptool instead.
         </p>
         <noscript class="notice is-error">This page needs JavaScript to talk to the board.</noscript>
     </section>
@@ -354,8 +414,8 @@ esp-web-install-button:not(:defined) > * { display: none; }
         </p>
         <p class="muted small">
             Updating an already-provisioned gateway? Use the OTA upload in its own web UI with
-            <span class="mono">esp_dali_gw.bin</span> from the release instead; that keeps the
-            configuration.
+            <span class="mono" id="ota-file">esp_dali_gw-&lt;board&gt;.bin</span> from the release
+            instead; that keeps the configuration.
         </p>
     </section>
 
@@ -392,38 +452,134 @@ esp-web-install-button:not(:defined) > * { display: none; }
 <script>
 (function () {
     const REPO = 'https://github.com/calaos/esp_dali_gw';
+
+    // Everything the page knows about a board that is not in the release payload. A target that is
+    // not listed still renders, under its own name, rather than disappearing from the picker.
+    const BOARDS = {
+        esp32c6: {
+            name: 'Waveshare ESP32-C6-Pico',
+            specs: '4 MB flash · single-core RISC-V · Wi-Fi 6',
+        },
+        esp32s3: {
+            name: 'Waveshare ESP32-S3-Pico',
+            specs: '16 MB flash · 2 MB PSRAM · dual-core Xtensa · Wi-Fi 4',
+        },
+    };
+
+    const boards = document.getElementById('boards');
     const select = document.getElementById('version');
     const installer = document.getElementById('installer');
+    const installRow = document.getElementById('install-row');
+    const noBuild = document.getElementById('no-build');
     const notes = document.getElementById('notes');
     const badge = document.getElementById('latest-badge');
+    const hint = document.getElementById('version-hint');
+
+    let releases = [];
+    let target = null;
+
+    function buildFor(release, t) {
+        return (release.builds || []).find((b) => b.target === t) || null;
+    }
 
     function apply() {
-        const v = select.value;
-        // Relative to this page, so the image is same-origin and no CORS header is involved.
-        installer.manifest = `${v}/manifest.json`;
-        installer.setAttribute('manifest', `${v}/manifest.json`);
-        notes.href = `${REPO}/releases/tag/${v}`;
+        const release = releases.find((r) => r.version === select.value);
+        if (!release) return;
+        const build = buildFor(release, target);
+
+        for (const label of boards.querySelectorAll('.board')) {
+            label.classList.toggle('is-current', label.dataset.target === target);
+        }
+        notes.href = `${REPO}/releases/tag/${release.version}`;
         notes.hidden = false;
+        document.getElementById('ota-file').textContent = `esp_dali_gw-${target}.bin`;
+        document.getElementById('offline-file').textContent =
+            `esp_dali_gw-merged-${target}.bin`;
+
+        if (!build) {
+            // A version cut before this board existed is not an error, so name the ones that have
+            // it rather than just refusing.
+            const have = releases.filter((r) => buildFor(r, target)).map((r) => r.version);
+            noBuild.textContent = have.length
+                ? `${release.version} has no build for this board. Published for it: ${have.join(', ')}.`
+                : `No published version has a build for this board yet.`;
+            noBuild.hidden = false;
+            installRow.hidden = true;
+            return;
+        }
+
+        noBuild.hidden = true;
+        installRow.hidden = false;
+        // Relative to this page, so the image is same-origin and no CORS header is involved.
+        installer.manifest = build.manifest;
+        installer.setAttribute('manifest', build.manifest);
+    }
+
+    function renderBoards(targets) {
+        for (const t of targets) {
+            const meta = BOARDS[t] || { name: t, specs: '' };
+            const label = document.createElement('label');
+            label.className = 'board';
+            label.dataset.target = t;
+
+            const input = document.createElement('input');
+            input.type = 'radio';
+            input.name = 'board';
+            input.value = t;
+            input.checked = t === target;
+            input.addEventListener('change', () => {
+                target = t;
+                apply();
+            });
+
+            const name = document.createElement('span');
+            name.className = 'board__name';
+            name.textContent = meta.name;
+
+            const specs = document.createElement('span');
+            specs.className = 'board__specs';
+            specs.textContent = meta.specs;
+
+            label.append(input, name, specs);
+            boards.append(label);
+        }
     }
 
     function fail(msg) {
         badge.textContent = 'unavailable';
         badge.className = 'badge is-error';
         select.hidden = true;
-        document.getElementById('version-hint').textContent = msg;
+        installRow.hidden = true;
+        hint.textContent = msg;
     }
 
     fetch('versions.json', { cache: 'no-cache' })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
-        .then((versions) => {
-            if (!Array.isArray(versions) || versions.length === 0) throw new Error('empty');
-            for (const v of versions) {
+        .then((data) => {
+            if (!Array.isArray(data) || data.length === 0) throw new Error('empty');
+            releases = data;
+
+            // Board order follows the newest release, so the board this project ships today is the
+            // first card rather than whichever target sorts first.
+            const targets = [];
+            for (const r of releases) {
+                for (const b of r.builds || []) {
+                    if (!targets.includes(b.target)) targets.push(b.target);
+                }
+            }
+            if (targets.length === 0) throw new Error('no builds');
+            target = targets[0];
+            renderBoards(targets);
+            // Nothing to confuse while only one board has ever been published.
+            document.getElementById('board-warning').hidden = targets.length < 2;
+
+            for (const r of releases) {
                 const opt = document.createElement('option');
-                opt.value = v;
-                opt.textContent = v;
+                opt.value = r.version;
+                opt.textContent = r.version;
                 select.append(opt);
             }
-            badge.textContent = `latest ${versions[0]}`;
+            badge.textContent = `latest ${releases[0].version}`;
             badge.className = 'badge is-ok mono';
             apply();
         })

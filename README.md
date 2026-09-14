@@ -58,6 +58,18 @@ idf.py -p /dev/ttyACM0 flash monitor   # the board enumerates as USB-JTAG/serial
 The web UI is embedded into the firmware image, so `npm run build` has to come first — CMake fails
 with a hint if `web/dist/` is missing.
 
+The firmware builds for two boards. Give each target its own build directory and sdkconfig, or
+they overwrite each other:
+
+```bash
+idf.py -B build-esp32s3 -D SDKCONFIG=sdkconfig.esp32s3 set-target esp32s3
+idf.py -B build-esp32s3 -D SDKCONFIG=sdkconfig.esp32s3 build
+```
+
+`dependencies.lock` records the target it was last generated for, so switching targets leaves it
+modified. The pinned component versions are identical either way; the committed file is the
+`esp32c6` one and the change can be discarded.
+
 Without a full devcontainer, any command can be run in the same image directly:
 
 ```bash

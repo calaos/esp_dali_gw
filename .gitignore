@@ -1,5 +1,7 @@
 build/
+build-*/
 sdkconfig
+sdkconfig.esp32*
 sdkconfig.old
 managed_components/
 

@@ -63,19 +63,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  build:
-    needs: toolchain
+  # The version check and the changelog are per release, not per board, so they happen once and
+  # outside the matrix. Neither compiles anything, hence the bare runner.
+  version:
     runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.toolchain.outputs.image }}
-      # The runner's workspace is owned by a uid that does not exist in the image.
-      options: --user root
     outputs:
       tag: ${{ steps.v.outputs.tag }}
       prerelease: ${{ steps.v.outputs.prerelease }}
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,31 +94,6 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Web UI
-        run: |
-          npm --prefix web ci
-          npm --prefix web run lint
-          npm --prefix web run typecheck
-          npm --prefix web run build
-          tools/check-bundle-size.sh
-
-      - uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-
-
-      - name: Firmware
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-        run: |
-          idf.py set-target esp32c6
-          idf.py build
-          tools/check-app-size.sh
-
-      - name: Package
-        run: tools/package-release.sh "${{ steps.v.outputs.tag }}" dist
-
       - name: Changelog
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -132,10 +101,89 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: release-${{ steps.v.outputs.tag }}
-          path: |
-            dist/
-            release-notes.md
+          name: release-notes
+          path: release-notes.md
+          retention-days: 14
+
+  # Target-independent, and the firmware embeds the result, so it runs once ahead of both builds.
+  web:
+    needs: toolchain
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      # The runner's workspace is owned by a uid that does not exist in the image.
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm --prefix web ci
+      - run: npm --prefix web run lint
+      - run: npm --prefix web run typecheck
+      - run: npm --prefix web run build
+      - run: tools/check-bundle-size.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
+
+  # One leg per board, each with its own build directory and its own sdkconfig: both default to a
+  # single shared path and the two targets would otherwise reconfigure each other's tree.
+  build:
+    needs: [toolchain, version, web]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32c6, esp32s3]
+    container:
+      image: ${{ needs.toolchain.outputs.image }}
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_DIR: build-${{ matrix.target }}
+      SDKCONFIG: sdkconfig.${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # PROJECT_VER comes from `git describe`
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          # Per target: the object files are for different architectures, and two legs sharing one
+          # key would also race to save it.
+          key: ccache-${{ runner.os }}-${{ matrix.target }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Firmware
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDKCONFIG" set-target "${{ matrix.target }}"
+          idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDKCONFIG" build
+
+      - name: Size report and OTA slot budget
+        # Reads the slot size from the partition table this build used; the C6 and the S3 do not
+        # share one.
+        run: tools/check-app-size.sh "$BUILD_DIR"
+
+      - name: Package
+        run: tools/package-release.sh "${{ matrix.target }}" "${{ needs.version.outputs.tag }}" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
           retention-days: 14
 
   host-tests:
@@ -168,9 +216,9 @@ jobs:
           clang-format --dry-run --Werror "${files[@]}"
 
   # No build happens below this line, so these jobs run on the bare runner rather than in the
-  # toolchain image: they only move bytes that the container job produced.
+  # toolchain image: they only move bytes that the container jobs produced.
   publish:
-    needs: [build, host-tests, lint]
+    needs: [build, host-tests, lint, version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,34 +227,43 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: release-${{ needs.build.outputs.tag }}
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
 
-      - name: Verify checksums
-        run: cd dist && sha256sum --check SHA256SUMS
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      # Each build job hashes its own files, so the parts are joined here rather than recomputed:
+      # the digests still come from the machine that produced the bytes.
+      - name: Checksums
+        run: |
+          cd dist
+          cat SHA256SUMS.* | sort -k2 >SHA256SUMS
+          rm -f SHA256SUMS.*
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS
 
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ needs.build.outputs.tag }}" \
+          gh release create "${{ needs.version.outputs.tag }}" \
             --verify-tag \
-            --title "${{ needs.build.outputs.tag }}" \
+            --title "${{ needs.version.outputs.tag }}" \
             --notes-file release-notes.md \
-            ${{ needs.build.outputs.prerelease == 'true' && '--prerelease' || '' }} \
-            dist/esp_dali_gw.bin \
-            dist/bootloader.bin \
-            dist/partition-table.bin \
-            dist/ota_data_initial.bin \
-            dist/esp_dali_gw-merged.bin \
-            dist/manifest.json \
+            ${{ needs.version.outputs.prerelease == 'true' && '--prerelease' || '' }} \
+            dist/*.bin \
+            dist/manifest-*.json \
             dist/SHA256SUMS
 
-      # The flasher page and the merged image live on gh-pages, same origin, so ESP Web Tools
+      # The flasher page and the merged images live on gh-pages, same origin, so ESP Web Tools
       # fetches the binary without a CORS round trip through the release asset CDN.
       - name: Publish the flashing page
-        if: needs.build.outputs.prerelease == 'false'
+        if: needs.version.outputs.prerelease == 'false'
         env:
-          TAG: ${{ needs.build.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"

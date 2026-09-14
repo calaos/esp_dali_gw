@@ -81,15 +81,25 @@ jobs:
           path: web/dist
           retention-days: 7
 
+  # One leg per board. The toolchain image no longer pins IDF_TARGET, so each leg sets its own —
+  # and gets its own build directory and its own sdkconfig, because both default to a single shared
+  # path and the two targets would otherwise reconfigure each other's tree.
   firmware:
     needs: [toolchain, web]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [esp32c6, esp32s3]
     container:
       image: ${{ needs.toolchain.outputs.image }}
       options: --user root
     defaults:
       run:
         shell: bash
+    env:
+      BUILD_DIR: build-${{ matrix.target }}
+      SDKCONFIG: sdkconfig.${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,33 +113,38 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-
+          # Per target: the object files are for different architectures, and two legs sharing one
+          # key would also race to save it.
+          key: ccache-${{ runner.os }}-${{ matrix.target }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Build
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
-          idf.py set-target esp32c6
-          idf.py build
+          idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDKCONFIG" set-target "${{ matrix.target }}"
+          idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDKCONFIG" build
 
       - name: Size report and OTA slot budget
-        run: tools/check-app-size.sh
+        # Reads the slot size from the partition table this build used; the C6 and the S3 do not
+        # share one.
+        run: tools/check-app-size.sh "$BUILD_DIR"
 
       - name: Merged image
         run: |
-          cd build
-          esptool --chip esp32c6 merge-bin -o esp_dali_gw-merged.bin @flash_args
+          cd "$BUILD_DIR"
+          esptool --chip "${{ matrix.target }}" merge-bin \
+            -o "esp_dali_gw-merged-${{ matrix.target }}.bin" @flash_args
 
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: firmware-${{ matrix.target }}
           path: |
-            build/esp_dali_gw.bin
-            build/bootloader/bootloader.bin
-            build/partition_table/partition-table.bin
-            build/ota_data_initial.bin
-            build/esp_dali_gw-merged.bin
+            build-${{ matrix.target }}/esp_dali_gw.bin
+            build-${{ matrix.target }}/bootloader/bootloader.bin
+            build-${{ matrix.target }}/partition_table/partition-table.bin
+            build-${{ matrix.target }}/ota_data_initial.bin
+            build-${{ matrix.target }}/esp_dali_gw-merged-${{ matrix.target }}.bin
           retention-days: 7
 
   host-tests:
