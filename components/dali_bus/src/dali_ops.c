@@ -769,8 +769,9 @@ void bus_long_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
 
 #define BANK0_GTIN_OFFSET 0x03
 #define BANK0_GTIN_BYTES 6
+#define BANK0_VERSION_OFFSET 0x01
 #define BANK0_SERIAL_OFFSET 0x0B
-#define BANK0_SERIAL_BYTES 4
+#define BANK0_SERIAL_BYTES 8 /* IEC 62386-102 ed2: 0x0B..0x12, MSB first */
 
 enum {
     DEEP_MIN = 0,
@@ -783,6 +784,8 @@ enum {
     DEEP_GROUPS_HIGH,
     DEEP_SCENE_FIRST,
     DEEP_SELECT_BANK = DEEP_SCENE_FIRST + GW_MAX_SCENES,
+    DEEP_VERSION_ADDR,
+    DEEP_VERSION_READ,
     DEEP_GTIN_ADDR,
     DEEP_GTIN_FIRST,
     DEEP_SERIAL_ADDR = DEEP_GTIN_FIRST + BANK0_GTIN_BYTES,
@@ -880,6 +883,15 @@ static bool step_scan_deep(bus_ctx_t *ctx, uint8_t addr)
             bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG1, 0, false, NULL);
             ctx->op.scratch = 0;
             break;
+        case DEEP_VERSION_ADDR:
+            bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, BANK0_VERSION_OFFSET, false, NULL);
+            break;
+        case DEEP_VERSION_READ:
+            /* Edition 2 puts the memory bank 0 version here; edition 1 called it reserved, so an
+             * old gear may answer 0 or 0xFF. Needs checking against a real fitting. */
+            bus_transact(ctx, target, true, DALI_CMD_READ_MEMORY_LOCATION, false, &reply);
+            gear->identity.bank0_version = DALI_RESULT_IS_VALID(reply) ? (uint8_t)reply : 0;
+            break;
         case DEEP_GTIN_ADDR:
             bus_special(ctx, DALI_SPECIAL_DATA_TRANSFER_REG, BANK0_GTIN_OFFSET, false, NULL);
             break;
@@ -941,8 +953,18 @@ static void identify_begin(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res
 static void identify_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
 {
     if (ctx->op.cancel || ctx->op.cursor >= ctx->op.total) {
-        /* Leave the gear where it was rather than at whichever end of the blink we stopped on. */
-        bus_transact(ctx, ctx->op.target, true, DALI_CMD_RECALL_MAX_LEVEL, false, NULL);
+        /*
+         * Put the gear back where the blink found it. RECALL MAX would leave it at full output and
+         * the registry claiming otherwise, which is a worse lie than a light that stayed dim.
+         */
+        uint8_t addr = ctx->op.target.addr;
+        bool known = ctx->op.target.type == GW_TARGET_SHORT && addr < GW_MAX_GEARS &&
+                     ctx->gears[addr].level_valid;
+        if (known) {
+            send_level(ctx, ctx->op.target, ctx->gears[addr].level);
+        } else {
+            bus_transact(ctx, ctx->op.target, true, DALI_CMD_RECALL_MAX_LEVEL, false, NULL);
+        }
         finish(ctx, "identify", res, done);
         return;
     }

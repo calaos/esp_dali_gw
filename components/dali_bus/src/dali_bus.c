@@ -282,6 +282,11 @@ static void run_command(bus_msg_t *msg)
     deliver(msg, &res);
 }
 
+/**
+ * The started acknowledgement goes to whoever asked, but it must not be published as a result: it
+ * carries the same id and action as the real one, so a client watching the stream would see an
+ * indistinguishable "scan ok" at t=0 and again when the scan actually finishes.
+ */
 static void start_long(bus_msg_t *msg)
 {
     gw_result_t res;
@@ -296,7 +301,14 @@ static void start_long(bus_msg_t *msg)
     }
     registry_unlock();
 
-    deliver(msg, &res);
+    if (msg->reply != NULL) {
+        msg->reply->res = res;
+        memset(&res, 0, sizeof(res));
+        xSemaphoreGive(msg->reply->done);
+        reply_release(msg->reply);
+    } else {
+        gw_api_result_free(&res);
+    }
     bus_notify_state(&s_ctx);
 }
 
@@ -340,6 +352,12 @@ static void serve_between_steps(void)
             snprintf(message, sizeof(message), "%s is running",
                      s_ctx.op.kind == GW_CMD_SCAN ? "scan" : "another operation");
             reject(&msg, GW_ERR_BUS_BUSY, message);
+            continue;
+        }
+        if (s_ctx.op.kind == GW_CMD_COMMISSION) {
+            /* Gears are in the initialise state and ignore ordinary commands, so serving one would
+             * report a success that never reached the bus. */
+            reject(&msg, GW_ERR_BUS_BUSY, "commissioning is running");
             continue;
         }
         if (msg.cmd.urgent) {

@@ -94,7 +94,11 @@ Wire the PSU first — the transceiver has none. See `docs/HARDWARE.md`.
 ## E. Full bench
 
 - [ ] **Deep scan** reads config and memory bank 0. Check GTIN and serial against the label on the
-      gear — the byte order and offsets in bank 0 are the likeliest thing to be wrong.
+      gear — the byte order and offsets in bank 0 are the likeliest thing to be wrong. The serial is
+      read as 8 bytes from 0x0B (edition 2); an edition 1 gear may lay it out differently.
+- [ ] `identity.bank0_version` is read from location 0x01, which edition 2 calls the memory bank 0
+      version and edition 1 called reserved. An old gear may answer 0 or 0xFF; confirm against a
+      real fitting before trusting the field.
 - [ ] `configure` writes min, max, power-on, system-failure, fade time, fade rate; every parameter
       reads back `ok`. Deliberately write an out-of-range value and confirm it reports `mismatch`
       rather than silently passing.
