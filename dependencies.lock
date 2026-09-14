@@ -82,6 +82,6 @@ direct_dependencies:
 - espressif/mdns
 - espressif/mqtt
 - idf
-manifest_hash: eb72ab3e1e430ebf9cc1f82a9d600518af2d51182decf235df40274aadd922f0
+manifest_hash: abb631bcc99b93108f206981e004c24dcbdbbf9cf9775a7aedcecc1cee625323
 target: esp32c6
 version: 3.0.0
