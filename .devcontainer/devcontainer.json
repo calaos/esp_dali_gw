@@ -1,0 +1,59 @@
+{
+  "name": "esp_dali_gw (ESP-IDF 6 + Node 22)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "IDF_VERSION": "v6.0.2",
+      "NODE_MAJOR": "22"
+    }
+  },
+  "workspaceFolder": "/workspaces/esp_dali_gw",
+  "remoteUser": "dev",
+
+  // Serial access for flashing/monitoring. Linux hosts: the whole /dev tree is mounted so a board
+  // plugged in *after* the container starts is still visible (a plain --device=/dev/ttyACM0 fails
+  // if the board is absent at startup). macOS/Windows: Docker Desktop cannot pass USB serial through;
+  // build in the container and flash from the host (tools/flash.sh) or via the web flasher, or run
+  // `esp_rfc2217_server.py` on the host and point ESPPORT to rfc2217://host.docker.internal:4000.
+  "runArgs": ["--privileged"],
+  "mounts": [
+    "source=/dev,target=/dev,type=bind",
+    "source=esp_dali_gw-ccache,target=/home/dev/.cache/ccache,type=volume",
+    "source=esp_dali_gw-node_modules,target=/workspaces/esp_dali_gw/web/node_modules,type=volume",
+    "source=esp_dali_gw-idf-tools-cache,target=/home/dev/.espressif,type=volume"
+  ],
+
+  "containerEnv": {
+    "IDF_TARGET": "esp32c6",
+    "ESPPORT": "/dev/ttyACM0",
+    "ESPBAUD": "921600"
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "espressif.esp-idf-extension",
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "xaver.clang-format",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "github.vscode-github-actions",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "C_Cpp.clang_format_style": "file",
+        "editor.formatOnSave": true,
+        "files.associations": { "sdkconfig*": "ini", "*.projbuild": "kconfig" },
+        "idf.espIdfPath": "/opt/esp/idf",
+        "idf.toolsPath": "/opt/esp",
+        "idf.port": "/dev/ttyACM0",
+        "idf.adapterTargetName": "esp32c6"
+      }
+    }
+  }
+}
