@@ -22,6 +22,7 @@
 #include "net_wifi.h"
 
 #include "dns_hijack.h"
+#include "time_sync.h"
 
 static const char *TAG = "net";
 
@@ -377,6 +378,7 @@ static void handle_disconnected(void)
 
 static void handle_got_ip(void)
 {
+    time_sync_start();
     s_backoff_ms = BACKOFF_MIN_MS;
     s_retry_at = 0;
     s_fallback_at = 0;

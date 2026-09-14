@@ -13,7 +13,9 @@
 #include "gw_events.h"
 #include "http_routes.h"
 #include "http_util.h"
+#include "mqtt_iface.h"
 #include "net_wifi.h"
+#include "status_led.h"
 
 static const char *TAG = "http";
 
@@ -61,6 +63,12 @@ static esp_err_t apply_config(httpd_req_t *req, const cJSON *root)
     if (err != ESP_OK) {
         return http_send_error(req, gw_api_err_from_esp(err), "could not persist configuration");
     }
+
+    /* Whatever can take effect without a reboot, does so now rather than at the next one. */
+    if (impact & APP_CONFIG_IMPACT_MQTT_RESTART) {
+        mqtt_iface_restart();
+    }
+    status_led_set_brightness(cfg.led.brightness);
 
     cJSON *res = cJSON_CreateObject();
     if (res == NULL) {
