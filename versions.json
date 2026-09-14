@@ -1,3 +1,15 @@
 [
-  "v0.1.0"
+  {
+    "version": "v0.2.0",
+    "builds": [
+      { "target": "esp32c6", "manifest": "v0.2.0/esp32c6/manifest.json" },
+      { "target": "esp32s3", "manifest": "v0.2.0/esp32s3/manifest.json" }
+    ]
+  },
+  {
+    "version": "v0.1.0",
+    "builds": [
+      { "target": "esp32c6", "manifest": "v0.1.0/manifest.json" }
+    ]
+  }
 ]

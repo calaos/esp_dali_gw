@@ -1,0 +1,15 @@
+{
+  "name": "esp_dali_gw (ESP32-C6-Pico)",
+  "version": "v0.2.0",
+  "funding_url": "https://calaos.fr/",
+  "new_install_prompt_erase": true,
+  "new_install_improv_wait_time": 0,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C6",
+      "parts": [
+        { "path": "esp_dali_gw-merged-esp32c6.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
