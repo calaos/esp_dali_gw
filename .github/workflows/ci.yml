@@ -162,8 +162,7 @@ jobs:
           printf '%s\n' "${files[@]}"
           clang-format --dry-run --Werror "${files[@]}"
       - name: cppcheck
-        # Non-blocking until the existing findings are cleared (SPEC 15.2 step 4).
-        continue-on-error: true
+        # Blocking: SPEC 15.2 step 4 says non-blocking at first, blocking once clean. It is clean.
         run: |
           cppcheck --enable=warning,portability --inline-suppr --std=c17 \
                    --suppress=missingInclude --error-exitcode=1 \
