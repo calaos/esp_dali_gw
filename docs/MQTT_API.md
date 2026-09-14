@@ -3,7 +3,7 @@
 > **Milestone status.** Everything on this page is implemented in **M2** unless a row says
 > otherwise. `commission`, `configure`, `set_short_address`, `remove_short_address` and `identify`
 > are accepted and routed in M2 but the bus-side operation lands in **M3**; `color` and `poll_all`
-> land in **M4**; `event/rx` is **M5 (v2)**. Home Assistant discovery is implemented in **M4** and
+> land in **M4** and `event/rx` in **M5**. Home Assistant discovery is implemented in **M4** and
 > has **not been verified against a live Home Assistant or on hardware** — see the section below.
 > [SPEC.md §8](SPEC.md#8-mqtt-api) remains authoritative for the wire schema, with the one
 > documented deviation of [ADR 0005](adr/0005-ha-discovery-template-schema.md).
@@ -31,7 +31,7 @@ The client starts only when `mqtt.enabled` is true **and** `mqtt.uri` is non-emp
 | `<b>/result/error` | no | on an unknown topic or an unparseable payload | result envelope with `"error":"invalid_arg"` |
 | `<b>/event/progress` | no | on each step of a long operation | progress object |
 | `<b>/event/log` | no | on a WARN+ bus log line, **rate limited** | log object |
-| `<b>/event/rx` | no | **M5 (v2)** — passively received frames | `{"frame":"A1F3","bits":16,"ts":…}` |
+| `<b>/event/rx` | no | Frames observed on the bus, while the monitor is on | `{"frame":"A1F3","bits":16,"ts":1234567}` |
 | `<prefix>/light/<object_id>/config` | yes | on connect, after a scan or commissioning, on a rename, and when a gear turns up between two scans | Home Assistant discovery document, or an empty payload to remove the entity |
 
 **Log rate limit.** Five messages pass immediately, then one every two seconds. Bus faults arrive in
@@ -421,10 +421,29 @@ gateway that merely rebooted must not drop its own entities.
   template-light schema and every template has been rendered against real payloads, but no live
   Home Assistant, broker or gear has been part of that.
 
+## Observed frames — `<b>/event/rx`
+
+Published only while passive listening is on, which is a **runtime toggle** (`POST /api/bus/monitor`)
+and is off after every reboot.
+
+```json
+{ "frame": "A1F3", "bits": 16, "ts": 1234567 }
+```
+
+`frame` is uppercase hex, `bits` is 8 (a backward frame, i.e. a reply), 16 (a forward frame) or 24
+(Part 103 input-device traffic), and `ts` is milliseconds since boot.
+
+Two properties are deliberate and worth knowing before reading a capture:
+
+- **Only foreign traffic appears.** The gateway's own frames cannot reach the listener: its receiver
+  is disabled from before it transmits until after the mandated inter-frame gap. A capture that
+  stays empty while the gateway itself dims a light is correct, not broken.
+- **It is lossy under load.** Both the event path and the broker path drop a frame rather than stall
+  the driver's listener task. Treat a capture as a sample of the bus, not as a complete record.
+
 ## Out of scope
 
-- **Passive listening** and `<b>/event/rx` — **M5 (v2)**. The `espressif/dali` driver has no
-  bus-idle detection and no listen mode, so nothing the gateway did not send is observable today;
-  input devices (Part 103) are polled, not received.
+- **Part 103 event decoding.** Observed 24-bit input-device frames are published raw on
+  `<b>/event/rx`; they are not yet decoded into button or occupancy events (SPEC §16, M5).
 - Acting as a control *device* (bus slave), multi-bus, and TLS to the local HTTP server (SPEC §1).
 - Home Assistant entities other than lights: no scene, switch or sensor entities are published.

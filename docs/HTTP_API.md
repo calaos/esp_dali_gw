@@ -41,6 +41,7 @@ Implemented in M1:
 | `POST /api/bus/check` | `{}` | Result whose `data` is `{"powered":bool,"any_reply":bool}`. |
 | `POST /api/bus/raw` | `{"frame":"FF08","send_twice":false,"expect_reply":false}` | Result whose `data` is `{"reply":int\|null}`. `frame` is 4 or 6 hex digits. Unrestricted by design and logged at WARN. |
 | `POST /api/bus/query` | `{"addr":3,"query":"actual_level"}` or `{"addr":3,"opcode":160}` | Result whose `data` is `{"reply":int\|null,"opcode":int}`. |
+| `POST /api/bus/monitor` | `{"enabled":true}` | `{"ok":true,"listening":bool}`. Turns passive listening on or off. **Runtime only — it is off after every reboot.** |
 
 ### Gears and groups
 
@@ -61,7 +62,13 @@ A scene of `null` means "not programmed" (0xFF on the wire), which is not level 
 ### Events
 
 `GET /api/events` is a Server-Sent Events stream. Event names: `gear`, `bus`, `progress`,
-`result`, `log`. A comment heartbeat is sent every 15 s.
+`result`, `log`, and `rx` while the monitor is on. A comment heartbeat is sent every 15 s.
+
+An `rx` frame is `{"frame":"A1F3","bits":16,"ts":1234567}` — uppercase hex, 8, 16 or 24 bits, and
+milliseconds since boot. Only **foreign** traffic appears: the gateway's own frames cannot reach
+the listener, because its receiver is disabled from before it transmits until after the mandated
+inter-frame gap. The stream drops frames rather than stalling the driver's listener under load, so
+the monitor is a sample of the bus, not a complete capture.
 
 **At most three concurrent clients**; a fourth gets `503` with `error: "bus_busy"` rather than
 evicting an existing one. A client that stops reading is dropped rather than being allowed to stall
