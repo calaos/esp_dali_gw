@@ -1,0 +1,4 @@
+CONFIG_IDF_TARGET="esp32c6"
+
+# The C6-Pico exposes only USB-JTAG/serial; without this the console is silent on /dev/ttyACM0.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

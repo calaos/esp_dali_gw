@@ -1,0 +1,13 @@
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+
+web/node_modules/
+web/dist/
+
+.vscode/
+compile_commands.json
+*.swp
+.DS_Store
+build-host/

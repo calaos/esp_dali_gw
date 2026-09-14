@@ -1,0 +1,39 @@
+menu "esp_dali_gw"
+
+    comment "Hardware defaults for the Waveshare ESP32-C6-Pico + Pico-DALI2"
+
+    config GW_DALI_TX_GPIO
+        int "DALI TX GPIO"
+        default 14
+        help
+            Drives the bus shorting MOSFET. LOW asserts the bus, HIGH releases it, so the
+            Espressif driver runs with invert_tx = false. Overridable at runtime in dali.tx_gpio.
+
+    config GW_DALI_RX_GPIO
+        int "DALI RX GPIO"
+        default 5
+        help
+            Bus receive through the optocoupler. HIGH is bus idle. invert_rx = false.
+
+    config GW_LED_GPIO
+        int "Status RGB LED GPIO"
+        default 8
+
+    config GW_BUTTON_GPIO
+        int "BOOT button GPIO"
+        default 9
+        help
+            Strapping pin: only ever read after boot. Held 5 s it triggers a factory reset.
+
+    config GW_AP_PASSWORD
+        string "Default SoftAP password"
+        default "dali12345"
+        help
+            WPA2 password of the ESP-DALI-GW-<id> provisioning network. Changeable at runtime;
+            this is only the value a factory-reset device comes up with.
+
+    config GW_FACTORY_RESET_HOLD_MS
+        int "Factory reset button hold time (ms)"
+        default 5000
+
+endmenu
