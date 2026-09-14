@@ -629,3 +629,392 @@ input[type='range'] {
     text-align: right;
     overflow-wrap: anywhere;
 }
+
+/* --------------------------------------------------------------- sections */
+
+.stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.row--end {
+    justify-content: flex-end;
+}
+
+.section__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.section__head h2 {
+    margin: 0;
+}
+
+.section__lede {
+    margin-bottom: var(--space-4);
+}
+
+/*
+ * Navigation. The current section is marked with the same 3px edge the panels use for status —
+ * one structural device for "this one", wherever it appears.
+ */
+.nav {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    gap: var(--space-1);
+    padding: 0 var(--space-4);
+    border-bottom: var(--border);
+    background: var(--c-surface);
+    overflow-x: auto;
+}
+
+.nav__link {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--control-h);
+    padding: 0 var(--space-3);
+    border-bottom: var(--rail-width) solid transparent;
+    color: var(--c-text-muted);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.nav__link:hover {
+    color: var(--c-text);
+}
+
+.nav__link.is-current {
+    border-bottom-color: var(--c-accent);
+    color: var(--c-text);
+}
+
+/* ------------------------------------------------------------------ forms */
+
+.field-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+/*
+ * Same alignment rule as .data-list: label left, value right. A settings row and an About row are
+ * the same object in write and read mode, so the two screens scan identically.
+ */
+.field {
+    display: grid;
+    gap: var(--space-1);
+}
+
+@media (min-width: 44rem) {
+    .field {
+        grid-template-columns: 14rem 1fr;
+        gap: var(--space-2) var(--space-6);
+        align-items: start;
+    }
+
+    .field > label {
+        margin-bottom: 0;
+        padding-top: 0.7rem;
+    }
+}
+
+.field__flag {
+    margin-left: var(--space-2);
+}
+
+.field__hint {
+    margin: var(--space-1) 0 0;
+    max-width: var(--measure);
+    font-size: var(--text-sm);
+}
+
+/* An input with something attached to it: a unit, or the button that abandons a password edit. */
+.field__row,
+.field__unit {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.field__unit input {
+    max-width: 9rem;
+}
+
+.field__stored {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h);
+}
+
+.field--check .field__spacer {
+    display: none;
+}
+
+@media (min-width: 44rem) {
+    .field--check .field__spacer {
+        display: block;
+    }
+}
+
+.check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h);
+    margin-bottom: 0;
+    color: var(--c-text);
+    font-size: var(--text-md);
+    cursor: pointer;
+}
+
+/* The label *is* the target, so the picker it hides must not shrink the hit area. */
+.file-button {
+    position: relative;
+    cursor: pointer;
+}
+
+.file-button.is-disabled {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+/* --------------------------------------------------------------- feedback */
+
+.notice,
+.confirm {
+    padding: var(--space-3);
+    border-left: var(--rail-width) solid var(--status, var(--c-border-strong));
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    background: var(--status-bg, var(--c-raised));
+}
+
+.notice > strong {
+    display: block;
+    margin-bottom: var(--space-1);
+    color: var(--status, var(--c-text));
+}
+
+.confirm p {
+    max-width: var(--measure);
+}
+
+.confirm .row {
+    margin-top: var(--space-3);
+}
+
+.meter {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-3) 0;
+}
+
+.meter__track {
+    flex: 1 1 auto;
+    height: 0.5rem;
+    border: var(--border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--c-raised);
+    overflow: hidden;
+}
+
+.meter__fill {
+    width: 0;
+    height: 100%;
+    background: var(--c-accent);
+    transition: width var(--dur-base) var(--ease-out);
+}
+
+/* Nothing to divide yet: a short bar sweeps instead of filling. */
+.meter__track--pending .meter__fill {
+    width: 35%;
+    animation: meter-sweep 1.4s var(--ease-in-out) infinite;
+}
+
+@keyframes meter-sweep {
+    from {
+        transform: translateX(-110%);
+    }
+    to {
+        transform: translateX(320%);
+    }
+}
+
+.meter__value {
+    flex: none;
+    min-width: 3rem;
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+    text-align: right;
+}
+
+/*
+ * Unsaved work follows the page instead of waiting at the bottom of a long form. It carries the
+ * status rail too: warn when saving will restart the gateway, busy otherwise.
+ */
+.savebar {
+    position: sticky;
+    bottom: var(--space-3);
+    z-index: 3;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    padding-left: calc(var(--space-3) + var(--rail-width));
+    border: var(--border);
+    border-left: var(--rail-width) solid var(--rail, var(--c-accent));
+    border-radius: var(--radius-md);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-2);
+}
+
+.savebar__text {
+    flex: 1 1 12rem;
+    margin: 0;
+}
+
+/* ------------------------------------------------------------ setup wizard */
+
+.steps {
+    display: flex;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.steps__item {
+    flex: 1 1 0;
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+}
+
+.steps__mark {
+    display: block;
+    height: var(--rail-width);
+    margin-bottom: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--c-border-strong);
+}
+
+.steps__item.is-done {
+    color: var(--c-text);
+}
+
+.steps__item.is-done .steps__mark {
+    background: var(--c-accent);
+}
+
+.netlist {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.netlist__row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: var(--control-h);
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.netlist__row:hover {
+    background: var(--c-raised);
+}
+
+.netlist__row.is-selected {
+    padding-left: calc(var(--space-3) + var(--rail-width));
+    background: var(--c-busy-bg);
+    box-shadow: inset var(--rail-width) 0 0 var(--c-accent);
+}
+
+.netlist__name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.netlist__lock,
+.signal {
+    flex: none;
+    display: flex;
+    align-items: center;
+    color: var(--c-text-muted);
+}
+
+.netlist__row.is-selected .signal,
+.netlist__row.is-selected .netlist__lock {
+    color: var(--c-accent);
+}
+
+/* The one screen the whole wizard exists for: the address the gateway moves to. */
+.handoff__url {
+    margin-bottom: var(--space-4);
+    color: var(--c-accent);
+    font-size: var(--text-xl);
+    line-height: var(--leading-tight);
+    overflow-wrap: anywhere;
+}
+
+.handoff__steps {
+    margin: 0 0 var(--space-4);
+    padding-left: var(--space-6);
+    max-width: var(--measure);
+}
+
+.handoff__steps li {
+    margin-bottom: var(--space-2);
+}
+
+/* ------------------------------------------------------------ shell tweaks */
+
+.appbar h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Rows read as a list of choices, not a paragraph: a hairline between them, hover and focus on. */
+.netlist li + li .netlist__row {
+    border-top: var(--border);
+}
+
+.netlist__row:focus-visible {
+    outline: 2px solid var(--c-focus);
+    outline-offset: -2px;
+}
+
+/* A settings page is not a text editor: an input stretched to 40rem is harder to scan, not easier. */
+.field__control > input,
+.field__control > select,
+.field__control > textarea,
+.field__row input {
+    max-width: 26rem;
+}

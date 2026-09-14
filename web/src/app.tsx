@@ -1,18 +1,15 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useState } from 'preact/hooks';
 
-import { api, ApiError, type Info, type WifiMode } from './api.ts';
+import { api, ApiError, type Config, type Info } from './api.ts';
+import { NAV, type Route, useHashRoute } from './router.ts';
+import { About } from './views/about.tsx';
+import { Settings } from './views/settings.tsx';
+import { SetupWizard } from './views/setup.tsx';
 
 type State =
     | { phase: 'loading' }
-    | { phase: 'ready'; info: Info }
+    | { phase: 'ready'; info: Info; config: Config }
     | { phase: 'error'; message: string; offline: boolean };
-
-/** `WifiMode` is how the firmware names it; these are how a person reading the panel names it. */
-const WIFI_MODE: Record<WifiMode, string> = {
-    sta: 'Client',
-    ap: 'Access point',
-    apsta: 'Client and access point',
-};
 
 function describe(error: unknown): { message: string; offline: boolean } {
     if (error instanceof ApiError) {
@@ -27,6 +24,7 @@ function tone(state: State): { className: string; label: string } {
         case 'loading':
             return { className: 'is-busy', label: 'Connecting' };
         case 'ready':
+            if (state.info.mode === 'ap') return { className: 'is-warn', label: 'Setup mode' };
             return state.info.status.state === 'online'
                 ? { className: 'is-ok', label: 'Online' }
                 : { className: 'is-warn', label: 'Degraded' };
@@ -39,69 +37,91 @@ function tone(state: State): { className: string; label: string } {
 
 export function App() {
     const [state, setState] = useState<State>({ phase: 'loading' });
+    const hash = useHashRoute();
 
-    useEffect(() => {
-        const controller = new AbortController();
-        api.info()
-            .then((info) => {
-                if (!controller.signal.aborted) setState({ phase: 'ready', info });
+    const load = useCallback(() => {
+        Promise.all([api.info(), api.config()])
+            .then(([info, config]) => {
+                setState({ phase: 'ready', info, config });
             })
             .catch((error: unknown) => {
-                if (!controller.signal.aborted) setState({ phase: 'error', ...describe(error) });
+                setState({ phase: 'error', ...describe(error) });
             });
-        return () => {
-            controller.abort();
-        };
     }, []);
 
+    useEffect(load, [load]);
+
     const { className, label } = tone(state);
+    const ready = state.phase === 'ready' ? state : null;
+
+    // SPEC §5.2: the wizard is the landing page while the device has no network of its own to join,
+    // but the rest of the UI stays reachable in AP mode for on-site diagnostics.
+    const provisioning =
+        ready !== null && (ready.info.mode === 'ap' || ready.config.wifi.ssid === '');
+    const route: Route = hash ?? (provisioning ? 'setup' : 'about');
+    const nav = provisioning ? [{ route: 'setup' as const, label: 'Setup' }, ...NAV] : NAV;
 
     return (
         <>
             <header class="appbar">
                 <span class="mark" aria-hidden="true" />
-                <h1>DALI Gateway</h1>
+                <h1>{ready?.config.device.name ?? 'DALI Gateway'}</h1>
                 <span class={`badge ${className}`} role="status">
                     <span class="dot" />
                     {label}
                 </span>
             </header>
+
+            {ready !== null && (
+                <nav class="nav" aria-label="Sections">
+                    {nav.map((entry) => (
+                        <a
+                            key={entry.route}
+                            class={entry.route === route ? 'nav__link is-current' : 'nav__link'}
+                            href={`#/${entry.route}`}
+                            aria-current={entry.route === route ? 'page' : undefined}
+                        >
+                            {entry.label}
+                        </a>
+                    ))}
+                </nav>
+            )}
+
             <main class="page">
-                <section class={`panel panel--rail ${className}`}>
-                    <Body state={state} />
-                </section>
+                {state.phase === 'loading' && (
+                    <section class="panel panel--rail is-busy">
+                        <p class="muted">Reading device information…</p>
+                    </section>
+                )}
+
+                {state.phase === 'error' && (
+                    <section class={`panel panel--rail ${className}`}>
+                        <h2>
+                            {state.offline ? 'No answer from the gateway' : 'The gateway refused'}
+                        </h2>
+                        <p class="muted mono">{state.message}</p>
+                        <p class="muted">
+                            If the gateway has just restarted, give it a few seconds. On the dev
+                            server this means the proxy has no device to talk to: set{' '}
+                            <code>DEVICE_HOST</code> and reload.
+                        </p>
+                        <button type="button" class="btn btn--secondary" onClick={load}>
+                            Try again
+                        </button>
+                    </section>
+                )}
+
+                {ready !== null && route === 'setup' && (
+                    <SetupWizard
+                        config={ready.config}
+                        hostname={ready.info.hostname ?? ready.config.device.hostname}
+                    />
+                )}
+                {ready !== null && route === 'settings' && (
+                    <Settings config={ready.config} onReload={load} />
+                )}
+                {ready !== null && route === 'about' && <About info={ready.info} />}
             </main>
         </>
     );
-}
-
-function Body({ state }: { state: State }) {
-    switch (state.phase) {
-        case 'loading':
-            return <p class="muted">Reading device information…</p>;
-        case 'ready':
-            return (
-                <dl class="data-list">
-                    <dt>Firmware</dt>
-                    <dd class="mono">{state.info.status.fw}</dd>
-                    <dt>ESP-IDF</dt>
-                    <dd class="mono">{state.info.status.idf}</dd>
-                    <dt>Wi-Fi</dt>
-                    <dd>{WIFI_MODE[state.info.mode]}</dd>
-                    <dt>Address</dt>
-                    <dd class="mono">{state.info.status.ip}</dd>
-                </dl>
-            );
-        case 'error':
-            return (
-                <>
-                    <h2>{state.offline ? 'No answer from the gateway' : 'The gateway refused'}</h2>
-                    <p class="muted mono">{state.message}</p>
-                    <p class="muted">
-                        On the dev server this means the proxy has no device to talk to. Set{' '}
-                        <code>DEVICE_HOST</code> to a gateway on your network and reload.
-                    </p>
-                </>
-            );
-    }
 }

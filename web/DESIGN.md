@@ -90,6 +90,84 @@ becomes invisible.
 duration tokens to 1 ms and sets the press scale to 1, on top of a global transition/animation
 override.
 
+## Screens (M1)
+
+Three views behind a hash router: the setup wizard, Settings and About. Dashboard, gear detail and
+bus tools (SPEC §10 views 2-4) land in M2/M3; the nav is built from the `NAV` array in
+`src/router.ts`, so adding them is one entry each.
+
+**One alignment rule across read and write.** `.data-list` already set it — label left in muted
+small type, value right — and `.field` reuses the same two-column grid for form rows. A Settings
+row and an About row are the same object in write and read mode, so the two screens scan
+identically instead of looking like two different products. Below 44rem both collapse to one
+column, which is also where the label column would start squeezing the control.
+
+**The edge marker is the only structural device, everywhere.** `.panel--rail` marks status, the
+current `.nav__link` carries the same 3 px bar on its bottom edge, a completed `.steps__item` fills
+its bar with the accent, and the selected `.netlist__row` gets it as an inset shadow on its leading
+edge. "This one" looks the same whatever it is attached to. Nothing else was invented to mean it.
+
+**Restart flags are per section when the whole section restarts.** SPEC §6 says Wi-Fi, the DALI
+GPIOs, HTTP auth and the LED GPIO need a reboot. Badging every Wi-Fi field individually produced
+six identical badges in one panel, which reads as decoration; `Section` takes the flag once, and
+the per-field badge is kept only for the mixed sections (DALI pins among non-pin settings, LED pin
+among LED settings). The device also reports `reboot_required` after the write, but the point is to
+say so *before* the user commits.
+
+**Confirmation is inline, never a modal.** `ConfirmButton` expands in place into a question and two
+buttons; `TypeToConfirm` additionally requires the word `RESET` before the destructive button
+enables. No dialog means no focus trap to get wrong, no scroll lock, and the question stays under
+the thumb on a phone. The factory-reset copy names what is lost — credentials, broker, fitting
+names — rather than asking "are you sure?".
+
+**Unsaved work follows the page.** `.savebar` sticks to the bottom of the viewport while any leaf
+differs from the loaded document. It counts the changes and switches its rail from busy to warn,
+and its button from "Save" to "Save and restart", when one of the changed paths needs a reboot.
+
+**The handoff screen is where the wizard spends its attention.** After "Save and restart" the page
+is about to lose the device on purpose, which is the single most confusing moment in the product.
+The new address is set at `--text-xl` in the mono face as the hero, the copy names the failure
+before the user sees it ("an error here is the handover finishing, not something going wrong"), and
+the two follow-up actions are numbered because they genuinely are a sequence. A probe keeps polling
+the old origin so that a reconfigure which stayed on the same network reports success; its silence
+is the documented, expected outcome, not an error state.
+
+**Secrets are a UI state, not just a value.** The device sends `***` and treats `***` on a write as
+"unchanged" (SPEC §6). `SecretField` therefore shows "Stored on the device" plus a Change button
+rather than a password box full of fake dots, and the write body is a leaf-level diff against the
+loaded document (`patchFrom`), so an untouched field is simply absent from the request. There is no
+code path that can turn "untouched" into `""`.
+
+**Progress is only ever real.** `.meter` animates because a transfer is actually advancing; the
+indeterminate variant sweeps only while there is genuinely nothing to divide (a scan in flight, an
+image being verified). Nothing else in the UI moves on its own: no entrance animations, no hover
+transitions on cards.
+
+## Additions to the vocabulary
+
+No new colour, type, spacing or motion token. New classes only, all composed from existing tokens:
+
+| Class | Role |
+|---|---|
+| `.stack`, `.row`, `.row--end` | gap-based flow containers |
+| `.section__head`, `.section__lede` | a panel heading with a trailing action, and its lede |
+| `.nav`, `.nav__link`, `.nav__link.is-current` | the sticky section bar and its edge marker |
+| `.field`, `.field-grid`, `.field__control`, `.field__hint`, `.field__flag`, `.field__row`, `.field__unit`, `.field__stored`, `.field__spacer`, `.field--check` | the form row and its parts |
+| `.check` | a checkbox and its own label as one 44 px target |
+| `.file-button`, `.file-button.is-disabled` | a `.btn` label wrapping a hidden file input |
+| `.notice`, `.confirm` | inline message and inline confirmation, both driven by `--status` |
+| `.meter`, `.meter__track`, `.meter__track--pending`, `.meter__fill`, `.meter__value` | progress |
+| `.steps`, `.steps__item`, `.steps__mark` | the wizard's step rail |
+| `.netlist`, `.netlist__row`, `.netlist__name`, `.netlist__lock`, `.signal` | the scan result list |
+| `.savebar`, `.savebar__text` | the sticky unsaved-changes bar |
+| `.handoff__url`, `.handoff__steps` | the post-save handoff screen |
+
+`.btn--sm` exists in the token layer but is not used on any touch target in M1: every button and
+input in these screens is at least `--control-h` (44 px). Keep it for the dense gear lists in M2.
+
+The two icons (signal bars, padlock) are inline SVG that inherit `currentColor` and carry a
+`.visually-hidden` label. No icon font, no sprite, no third icon.
+
 ## Tokens
 
 | Group | Tokens |
@@ -144,5 +222,6 @@ Re-run the check after any palette edit — the ratios above are the contract, n
 
 ## Budget
 
-CSS is 2.7 KB gzipped of the 100 KB total budget; the whole built UI is 9.96 KB gzipped
-(HTML 0.48 + CSS 2.70 + JS 6.76).
+CSS is 3.62 KB gzipped of the 100 KB total budget; the whole built UI is 19.85 KB gzipped
+(HTML 0.49 + CSS 3.62 + JS 15.74), 19 % of the budget. Re-run `tools/check-bundle-size.sh` after
+any change.
