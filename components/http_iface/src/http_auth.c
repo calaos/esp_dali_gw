@@ -6,6 +6,7 @@
 
 #include "app_config.h"
 #include "http_auth.h"
+#include "http_util.h"
 
 static const char *TAG = "http";
 
@@ -26,11 +27,10 @@ static bool secure_equal(const char *a, const char *b)
 
 static bool challenge(httpd_req_t *req)
 {
-    httpd_resp_set_status(req, "401 Unauthorized");
     httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"esp_dali_gw\"");
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"invalid_arg\","
-                            "\"message\":\"authentication required\"}");
+    /* SPEC 7.5's error set has no "unauthorized"; the status carries that, the body stays in the
+     * one envelope every other failure uses. */
+    http_send_error_status(req, "401 Unauthorized", GW_ERR_INVALID_ARG, "authentication required");
     return false;
 }
 

@@ -26,6 +26,15 @@ esp_err_t http_send_json(httpd_req_t *req, cJSON *obj);
 /** @brief Send `{"ok":false,"error":...,"message":...}` with a status matching @p err. */
 esp_err_t http_send_error(httpd_req_t *req, gw_err_t err, const char *message);
 
+/**
+ * @brief Same, with an explicit status line.
+ *
+ * For the few failures that are transport-level rather than command-level -- an authentication
+ * challenge, a refused subscriber -- where the closed error set does not imply the right status.
+ */
+esp_err_t http_send_error_status(httpd_req_t *req, const char *status, gw_err_t err,
+                                 const char *message);
+
 /** @brief True when the query string contains @p key set to 1 or true. */
 bool http_query_flag(httpd_req_t *req, const char *key);
 

@@ -14,6 +14,7 @@
 
 #include "http_iface.h"
 #include "http_sse.h"
+#include "http_util.h"
 
 static const char *TAG = "http";
 
@@ -141,10 +142,7 @@ esp_err_t http_sse_open(httpd_req_t *req)
         unlock();
         /* Refusing is better than evicting: the UI reconnects, and three is the documented cap. */
         ESP_LOGW(TAG, "sse client refused, %d already connected", HTTP_IFACE_MAX_SSE_CLIENTS);
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        httpd_resp_set_type(req, "application/json");
-        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bus_busy\","
-                                       "\"message\":\"too many event subscribers\"}");
+        return http_send_error(req, GW_ERR_BUS_BUSY, "too many event subscribers");
     }
 
     s_clients[slot] = fd;

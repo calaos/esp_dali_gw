@@ -104,6 +104,12 @@ static const char *status_line(gw_err_t err)
 
 esp_err_t http_send_error(httpd_req_t *req, gw_err_t err, const char *message)
 {
+    return http_send_error_status(req, status_line(err), err, message);
+}
+
+esp_err_t http_send_error_status(httpd_req_t *req, const char *status, gw_err_t err,
+                                 const char *message)
+{
     cJSON *obj = cJSON_CreateObject();
     if (obj == NULL) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
@@ -116,7 +122,7 @@ esp_err_t http_send_error(httpd_req_t *req, gw_err_t err, const char *message)
     }
     ESP_LOGW(TAG, "%s %s: %s (%s)", http_method_str(req->method), req->uri, gw_api_err_str(err),
              message ? message : "");
-    httpd_resp_set_status(req, status_line(err));
+    httpd_resp_set_status(req, status);
     return http_send_json(req, obj);
 }
 
