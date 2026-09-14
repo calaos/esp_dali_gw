@@ -205,9 +205,9 @@ Assistant entities that address fittings by number.
 above the frame that caused it. `TX`/`RX` rather than an arrow glyph: it is what the protocol calls
 them, and it survives at `--text-xs`.
 
-**The M5 monitor has a place, not a placeholder.** The live bus monitor panel renders in the
-offline state with a badge saying `M5` and one sentence about what it will be. The stream parser
-already accepts and drops `event: rx`, so turning it on is a component and not a protocol change.
+**The M5 monitor had a place, not a placeholder.** The fourth panel on Bus tools rendered in the
+offline state with a badge saying `M5` and one sentence about what it would be. M5 replaced it in
+place; see below.
 
 ### The slider write path
 
@@ -252,6 +252,87 @@ goes away. A watchdog treats 45 s of silence (three missed 15 s heartbeats) as a
 reconnects, because a Wi-Fi association that drops without a FIN leaves the reader blocked for
 ever.
 
+## Screens (M5) — the passive monitor
+
+The fourth panel on Bus tools, replacing the M5 placeholder. No new colour, type, spacing or motion
+token, and no new structural device: it is the raw console's list shell with a different row grid.
+
+**It is a panel on an existing page, not a screen.** The monitor is a diagnostic someone opens
+once, usually because a wall switch is doing something unexpected. It sits below the raw console
+(the other thing on this page that speaks in frames), it is inert until started, and its list is
+capped at `60vh` so it never pushes Scan and Commissioning off the top of a phone.
+
+**Newest first, and the scroll box never moves.** A monitor that appends downwards has to choose
+between following the tail — which fights a finger that is trying to read a row — and leaving the
+live edge off-screen. Newest-first needs neither: the newest frame is always at a fixed position,
+the list can be bounded with `overflow-y: auto` without a single programmatic scroll, and it is the
+order the raw console above already uses. The export inverts it to oldest-first, because a log
+pasted into a bug report is read the way time runs, and its header says which way round it is.
+
+**The buffer is 200 frames and the header says so.** A burst on a DALI bus outruns a reader by two
+orders of magnitude, and the gateway itself drops frames rather than stall its receiver, so a
+bigger buffer would buy completeness the protocol path cannot deliver anyway. The count line
+reports both numbers — `1 077 frames, newest 200 kept` — so the buffer's edge is never implied by
+a list that simply stops.
+
+**Lossiness is stated in the UI, not only in the docs.** A line under the list says the gateway
+drops frames under load and so does this page, and that the list is a sample of the bus rather than
+a complete capture. The same two sentences head the exported text, because that is where the claim
+gets quoted.
+
+**"Your own frames are not here" is said three times, in the three places it is misread.** In the
+lede, so it is read before the first frame arrives; in the empty state, which is what a user sees
+when they press a dashboard button and expect the monitor to move; and as a `busy` notice while the
+gateway is running a scan or a commissioning pass, which is the one moment the panel can sit
+motionless for minutes while the bus is saturated.
+
+**The state shown is the device's, never the button's.** `listening` is only ever set from the
+`{"ok":true,"listening":bool}` the device answers with, so a refused start leaves the badge off and
+puts the device's own words in an error notice. An arriving `rx` frame also sets it: another tab,
+or a reload, can leave the monitor running with nothing here having clicked it. The panel also says
+that listening is not a setting and does not survive a reboot, because nothing else in this UI
+behaves that way.
+
+**Pause freezes the list, not the stream.** Frames that arrive while paused are counted and
+dropped rather than queued: at 200 frames of buffer, releasing a queued burst would evict exactly
+the rows the user paused to read. The count line then carries `731 skipped while paused` for as
+long as the capture lives, so the hole in the buffer is visible in the UI and in the export.
+
+**The bit count is the tag, the way `TX`/`RX` is in the console.** 8, 16 and 24 are what the event
+carries and they are what separates a reply from a command from a Part 103 message. Colour repeats
+the distinction — accent for a forward frame, green for a backward one, amber for anything
+unreadable — and never carries it alone.
+
+**A frame that cannot be read says so.** `readFrame()` in `src/dali.ts` decodes what IEC 62386-102
+fixes: the address byte (short address, group, broadcast, the special-command range) and the
+opcode, with the scene and group ranges computed rather than tabulated. Anything else — a 24-bit
+input-device message, a manufacturer opcode, a reserved address byte — is rendered muted with a
+reading that names the gap ("Input device, Part 103 — not decoded"). The hex is always there to
+read. A monitor that invents a reading is worse than one that admits it has none. Backward frames
+are deliberately *not* correlated with the forward frame above them: it is usually the answer to
+it, and "usually" is not good enough when the path in front of it drops frames.
+
+**The list is deliberately not a live region.** A burst would read hundreds of rows aloud and bury
+the controls. The counts change at the same time and are the thing worth hearing, and the notices
+already carry `role="status"` / `role="alert"`.
+
+**Timestamps are the device's uptime, not a clock.** `ts` is milliseconds since boot — the gateway
+has no wall clock in AP mode — so it is rendered `H:MM:SS.mmm` in the mono face, which lines a
+captured frame up with a line in the device log.
+
+### Where the frames live
+
+`src/monitor.ts`, not `src/store.ts`. A store commit re-renders the dashboard, the gear grid and
+the bus banner, and foreign traffic arrives two orders of magnitude faster than a gear update.
+Frames land in a pending array and are published on a 120 ms timer, so a 250 frame/s burst costs
+about eight renders a second in one panel instead of 250 everywhere. The reading is computed once
+on arrival rather than on every render, which keeps the row a plain span. Measured against the
+stub: 900 frames in ~4 s hold the list at 200 rows with no dropped input and no scroll jump.
+
+Clipboard and download both exist because the device is served over plain HTTP on the LAN, where
+browsers leave `navigator.clipboard` undefined. A refusal is the normal case, not the edge one, so
+it is caught and answered with a notice pointing at Save as text.
+
 ## Additions to the vocabulary
 
 No new colour, type, spacing or motion token. New classes only, all composed from existing tokens.
@@ -290,6 +371,17 @@ No new colour, type, spacing or motion token. New classes only, all composed fro
 | `.table-scroll`, `.table` | the commissioning result table |
 | `.console`, `.console__row`, `.console__line`, `.console__dir`, `.console__dir--tx/--rx/--err/--wait`, `.console__text` | the raw frame history |
 | `.backlink`, `.tools__actions`, `.query__form`, `.query__reply` | small layout helpers |
+
+### M5
+
+| Class | Role |
+|---|---|
+| `.monitor` | the console shell, bounded to `60vh` and scrollable |
+| `.monitor__row`, `.monitor__time`, `.monitor__hex`, `.monitor__bits`, `.monitor__bits--forward/--backward/--unknown`, `.monitor__text` | one received frame: uptime, hex, bit-count tag, reading |
+| `.monitor__bar`, `.monitor__count`, `.monitor__note` | the list's toolbar, its counts and the caveats under it |
+
+`.monitor__row` overrides `.console__row`'s flex column at the same specificity, so it has to stay
+after it in the file.
 
 The dimmer is a bare `<input type="range">` styled only by `accent-color`, which the token layer
 already sets. The browser draws a filled track and a thumb that follow the viewer's colour scheme
@@ -364,6 +456,13 @@ fill of an absent card, so those pairs are held to the same contract:
 | `--c-offline` on `--c-bg` (absent card) | 5.46 | 6.64 |
 | `--c-border-strong` on `--c-raised` (UI, 3:1) | 3.62 | 3.41 |
 
+M5 put `--c-warn` on `--c-raised` (the tag of a frame that cannot be decoded), which is the only
+pair it added:
+
+| Pair | Light | Dark |
+|---|---|---|
+| `--c-warn` on `--c-raised` (monitor, unreadable frame) | 5.82 | 7.38 |
+
 `--c-border` is intentionally below 3:1 in both themes; see the two-border-tokens decision above.
 `--c-brand` / `--c-brand-light` are logotype colours used only in the decorative `.mark`, which
 1.4.11 exempts.
@@ -372,6 +471,7 @@ Re-run the check after any palette edit — the ratios above are the contract, n
 
 ## Budget
 
-After M3 the whole built UI is 31.45 KB gzipped (HTML 0.48 + CSS 4.47 + JS 26.50), 31 % of the
-100 KB budget. Still no runtime dependency beyond Preact. Re-run `tools/check-bundle-size.sh` after
-any change.
+After M5 the whole built UI is 34.29 KB gzipped (HTML 0.48 + CSS 4.63 + JS 29.18), 34 % of the
+100 KB budget; M3 ended at 31.45 KB and the monitor, its Part 102 opcode table included, cost
+2.1 KB of it. Still no runtime dependency beyond Preact — no virtual list, no clipboard shim.
+Re-run `tools/check-bundle-size.sh` after any change.

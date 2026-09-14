@@ -312,6 +312,12 @@ export interface Result<T = unknown> {
 
 export type Started = Result<{ started: boolean }>;
 
+/** `POST /api/bus/monitor`. `listening` is the device's state, not the one that was asked for. */
+export interface MonitorReply {
+    ok: boolean;
+    listening: boolean;
+}
+
 export interface CommissionData {
     assigned?: number;
     addresses?: number[];
@@ -463,6 +469,9 @@ export const api = {
         post<Started>('/bus/commission', { mode, confirm: true, start_addr: startAddr }),
     cancel: () => post<Result>('/bus/cancel', {}),
     check: () => post<Result<BusCheck>>('/bus/check', {}),
+
+    /** Passive listening. Runtime only: the device comes up with it off after every reboot. */
+    monitor: (enabled: boolean) => post<MonitorReply>('/bus/monitor', { enabled }),
 
     raw: (body: RawBody) => post<Result<QueryReply>>('/bus/raw', body),
     query: (body: QueryBody) => post<Result<QueryReply>>('/bus/query', body),

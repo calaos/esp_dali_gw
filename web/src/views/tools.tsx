@@ -1,14 +1,25 @@
 /**
- * Bus tools (SPEC §10 view 4): the three operations that talk to the whole bus at once, plus the
- * raw console. Everything here is destructive-adjacent, so nothing starts without a deliberate act.
+ * Bus tools (SPEC §10 view 4): the operations that talk to the whole bus at once, the raw console
+ * and the passive monitor. Everything that writes to the bus is destructive-adjacent, so nothing
+ * starts without a deliberate act.
  */
 
 import { Fragment } from 'preact';
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 
 import { api, type CommissionData, type CommissionMode, type Result } from '../api.ts';
-import { addrLabel, asRecord, hexByte, isFrame, MAX_ADDR } from '../dali.ts';
+import { addrLabel, asRecord, bootTime, hexByte, isFrame, MAX_ADDR } from '../dali.ts';
 import { describeWrite } from '../level.ts';
+import {
+    clearFrames,
+    copyText,
+    downloadText,
+    type MonitorFrame,
+    monitorText,
+    setListening,
+    setPaused,
+    useMonitor,
+} from '../monitor.ts';
 import { useStore } from '../store.ts';
 import {
     CheckField,
@@ -412,27 +423,196 @@ function RawConsole({ busy, powered }: { busy: boolean; powered: boolean }) {
     );
 }
 
-/* ------------------------------------------------------------- M5 placeholder */
+/* ---------------------------------------------------------- bus monitor */
 
 /**
- * Reserved, deliberately inert. SPEC §8.1 defines `event: rx` for passively received frames and
- * §10 lists the monitor as v2 work; the stream parser already accepts and drops the event, so
- * turning this on is a component, not a protocol change.
+ * The passive monitor (SPEC §16 M5). It shows what *other* controllers put on the bus; the
+ * gateway's own frames never come back to it, which is the one thing a user will otherwise read
+ * as a bug, so the panel says it in three places: the lede, the empty state, and while the
+ * gateway is busy on the bus itself.
  */
 function Monitor() {
+    const { bus } = useStore();
+    const monitor = useMonitor();
+    const { frames, seen, skipped, paused, listening } = monitor;
+    const [pending, setPending] = useState(false);
+    const [failure, setFailure] = useState<string | null>(null);
+    const [copied, setCopied] = useState<'no' | 'yes' | 'blocked'>('no');
+    const flash = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+    useEffect(
+        () => () => {
+            clearTimeout(flash.current);
+        },
+        [],
+    );
+
+    const toggle = (): void => {
+        setPending(true);
+        setFailure(null);
+        api
+            .monitor(!listening)
+            .then((reply) => {
+                setListening(reply.listening);
+                // Stopping leaves the buffer but not a pause: a paused monitor that has also been
+                // stopped has two reasons to show nothing and no way to tell them apart.
+                if (!reply.listening) setPaused(false);
+            })
+            .catch((error: unknown) => {
+                setFailure(describeWrite(error));
+            })
+            .finally(() => {
+                setPending(false);
+            });
+    };
+
+    const copy = (): void => {
+        void copyText(monitorText(monitor)).then((ok) => {
+            setCopied(ok ? 'yes' : 'blocked');
+            clearTimeout(flash.current);
+            flash.current = setTimeout(() => {
+                setCopied('no');
+            }, 3000);
+        });
+    };
+
     return (
-        <section class="panel panel--rail section is-offline">
+        <section class={`panel panel--rail section ${listening ? 'is-busy' : ''}`}>
             <div class="section__head">
-                <h2>Live bus monitor</h2>
-                <span class="badge is-offline">
-                    <span class="dot" />
-                    M5
-                </span>
+                <h2>Watch the bus</h2>
+                {listening && (
+                    <span class="badge is-busy">
+                        <span class="dot" />
+                        Listening
+                    </span>
+                )}
             </div>
-            <p class="muted">
-                Watching every frame on the bus, including the ones this gateway did not send,
-                arrives with the passive receiver in M5. Nothing is listening yet.
+            <p class="muted section__lede">
+                Reports the frames other controllers put on the bus — a wall panel, an occupancy
+                sensor, a second gateway. Frames this gateway sends are never reported back to it,
+                so nothing you do from the dashboard or from Raw frames above will show up here.
             </p>
+
+            <div class="row tools__actions">
+                <button
+                    type="button"
+                    class={listening ? 'btn btn--secondary' : 'btn btn--primary'}
+                    disabled={pending}
+                    onClick={toggle}
+                >
+                    {listening ? 'Stop listening' : 'Start listening'}
+                </button>
+                {listening && (
+                    <button
+                        type="button"
+                        class="btn btn--ghost"
+                        onClick={() => {
+                            setPaused(!paused);
+                        }}
+                    >
+                        {paused ? 'Resume' : 'Pause the list'}
+                    </button>
+                )}
+                {frames.length > 0 && (
+                    <button type="button" class="btn btn--ghost" onClick={clearFrames}>
+                        Clear
+                    </button>
+                )}
+            </div>
+            <p class="monitor__note muted">
+                Listening is not a setting: the gateway starts with it off after every reboot.
+            </p>
+
+            {failure !== null && (
+                <Notice tone="error" title="The gateway did not change the monitor">
+                    <p class="mono">{failure}</p>
+                </Notice>
+            )}
+
+            {listening && bus?.busy === true && (
+                <Notice tone="busy" title="The gateway is on the bus itself">
+                    <p>
+                        Its own frames are not reported, so the list can sit still while the
+                        operation above runs. Anything another controller sends still appears.
+                    </p>
+                </Notice>
+            )}
+
+            {frames.length === 0 ? (
+                <p class="monitor__note muted">
+                    {listening
+                        ? 'Listening. Nothing from another controller yet.'
+                        : 'Not listening yet.'}
+                </p>
+            ) : (
+                <>
+                    <div class="toolbar monitor__bar">
+                        <p class="muted monitor__count">
+                            {seen === frames.length
+                                ? `${seen} frames`
+                                : `${seen} frames, newest ${frames.length} kept`}
+                            {skipped > 0 && `, ${skipped} skipped while paused`}
+                        </p>
+                        <div class="row">
+                            <button type="button" class="btn btn--ghost" onClick={copy}>
+                                {copied === 'yes' ? 'Copied' : 'Copy'}
+                            </button>
+                            <button
+                                type="button"
+                                class="btn btn--ghost"
+                                onClick={() => {
+                                    downloadText(monitorText(monitor), 'dali-monitor.txt');
+                                }}
+                            >
+                                Save as text
+                            </button>
+                        </div>
+                    </div>
+
+                    {copied === 'blocked' && (
+                        <Notice tone="warn" title="The browser refused the clipboard">
+                            <p>
+                                It is only offered on a secure page, and the gateway is served over
+                                plain HTTP. Use Save as text instead.
+                            </p>
+                        </Notice>
+                    )}
+
+                    {/*
+                     * Not a live region on purpose: a burst would read hundreds of rows aloud and
+                     * bury the controls. The counts above it change at the same time and are the
+                     * thing worth hearing. Focusable because it scrolls and holds nothing that can
+                     * take focus.
+                     */}
+                    <ol class="console monitor" aria-label="Frames seen on the bus" tabIndex={0}>
+                        {frames.map((frame) => (
+                            <FrameRow key={frame.seq} frame={frame} />
+                        ))}
+                    </ol>
+                    <p class="monitor__note muted">
+                        The gateway drops frames rather than hold up its receiver, and so does this
+                        page under a burst. Treat the list as a sample of the bus, not a complete
+                        capture.
+                    </p>
+                </>
+            )}
         </section>
+    );
+}
+
+function FrameRow({ frame }: { frame: MonitorFrame }) {
+    const { reading } = frame;
+    return (
+        <li class="console__row monitor__row">
+            <span class="mono monitor__time">{bootTime(frame.ts)}</span>
+            <span class="mono monitor__hex">{frame.hex}</span>
+            <span class={`mono monitor__bits monitor__bits--${reading.kind}`}>
+                {frame.bits}
+                <span class="visually-hidden"> bit</span>
+            </span>
+            <span class={reading.decoded ? 'monitor__text' : 'monitor__text muted'}>
+                {reading.text}
+            </span>
+        </li>
     );
 }

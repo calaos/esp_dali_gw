@@ -1448,6 +1448,87 @@ input.scene__level {
     overflow-wrap: anywhere;
 }
 
+/*
+ * The bus monitor reuses the console's shell, so the two lists on Bus tools are one object and
+ * only the row grid and the bounded height are new. `.monitor__row` must stay after
+ * `.console__row`: it overrides that rule's flex column at the same specificity.
+ */
+.monitor {
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.monitor__row {
+    display: grid;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    grid-template-columns: max-content max-content max-content 1fr;
+    font-size: var(--text-sm);
+}
+
+.monitor__time {
+    color: var(--c-text-muted);
+    font-size: var(--text-xs);
+}
+
+.monitor__hex {
+    font-weight: var(--weight-medium);
+}
+
+/*
+ * The bit count is the tag, the way TX/RX is in the console: 8, 16 and 24 are what the event
+ * carries and what tells a reply from a command from a Part 103 message. Colour repeats it, it
+ * never carries it alone.
+ */
+.monitor__bits {
+    min-width: 1.25rem;
+    color: var(--c-text-muted);
+    font-size: var(--text-xs);
+    text-align: right;
+}
+
+.monitor__bits--forward {
+    color: var(--c-accent);
+}
+
+.monitor__bits--backward {
+    color: var(--c-ok);
+}
+
+.monitor__bits--unknown {
+    color: var(--c-warn);
+}
+
+.monitor__text {
+    overflow-wrap: anywhere;
+}
+
+.monitor__bar {
+    margin-top: var(--space-4);
+}
+
+.monitor__count {
+    margin: 0;
+    font-size: var(--text-sm);
+}
+
+.monitor__note {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+}
+
+/* Below this the reading needs the full width, so it takes its own row and the three fixed
+   columns close up rather than leaving the bit count stranded against the right edge. */
+@media (max-width: 30rem) {
+    .monitor__row {
+        grid-template-columns: max-content max-content max-content;
+    }
+
+    .monitor__text {
+        grid-column: 1 / -1;
+    }
+}
+
 /* ------------------------------------------------------------ navigation */
 
 .backlink {

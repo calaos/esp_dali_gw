@@ -20,6 +20,8 @@ walked through every path the UI has to survive without a restart:
     curl 'localhost:8099/stub/wipe'                 empty the registry
     curl 'localhost:8099/stub/nudge'                move a level from outside the browser
     curl 'localhost:8099/stub/log'                  emit a log event
+    curl 'localhost:8099/stub/set?rx_rate=20'       foreign frames per second while listening
+    curl 'localhost:8099/stub/burst?600'            600 frames as fast as the socket takes them
 
 Nothing here ships: the firmware serves these routes for real.
 """
@@ -44,7 +46,12 @@ STATE = {
     'sse_error': False,       # every stream attempt answers 500
     'sse_max': 3,
     'heartbeat_s': 15,
+    # M5 passive listening. Runtime only, exactly as the firmware has it: never persisted.
+    'listening': False,
+    'rx_rate': 4,             # foreign frames per second while listening
 }
+
+BOOT = time.time()
 
 NAMES = {
     0: 'Kitchen ceiling', 1: 'Kitchen worktop', 2: 'Hall downlights', 3: 'Living room north',
@@ -120,6 +127,50 @@ def publish_gear(g):
 
 def publish_bus():
     publish('bus', bus_doc())
+
+# ------------------------------------------------------------- foreign traffic
+
+# What another master and a couple of DALI-2 input devices put on the bus. The gateway never
+# reports its own frames, so nothing here is derived from what the UI sends.
+FOREIGN = [
+    ('FF00', 16),    # broadcast off
+    ('FF05', 16),    # broadcast recall max level
+    ('FF10', 16),    # broadcast go to scene 0
+    ('8312', 16),    # group 1 go to scene 2
+    ('06FE', 16),    # A3 direct level 254
+    ('0A80', 16),    # A5 direct level 128
+    ('0790', 16),    # A3 query status
+    ('11A0', 16),    # A8 query actual level
+    ('A500', 16),    # special: initialise, all gear
+    ('B701', 16),    # special: program short address A0
+    ('A900', 16),    # special: compare
+    ('2F3B', 16),    # A23 with an opcode outside part 102
+    ('D204', 16),    # reserved address byte
+    ('FF', 8),       # backward frames
+    ('91', 8),
+    ('00', 8),
+    ('018100', 24),  # part 103 input device event
+    ('0181FE', 24),
+]
+
+def publish_rx(frame, bits):
+    publish('rx', {'frame': frame, 'bits': bits, 'ts': int((time.time() - BOOT) * 1000)})
+
+def run_traffic():
+    """Idle foreign traffic, roughly the rate a small installation with wall panels produces."""
+    while True:
+        rate = max(STATE['rx_rate'], 1)
+        time.sleep(1.0 / rate)
+        if STATE['listening'] and CLIENTS:
+            publish_rx(*random.choice(FOREIGN))
+
+def run_burst(count):
+    """Faster than the UI can render, to exercise the bounded buffer and the pause."""
+    for _ in range(count):
+        if not STATE['listening']:
+            return
+        publish_rx(*random.choice(FOREIGN))
+        time.sleep(0.004)
 
 # ------------------------------------------------------------------ operations
 
@@ -309,6 +360,10 @@ class Handler(SimpleHTTPRequestHandler):
             publish_bus()
             return self.reply({'ok': True, 'action': 'bus_check',
                                'data': {'powered': STATE['powered'], 'replies': True}})
+
+        if p == '/api/bus/monitor':
+            STATE['listening'] = bool(b.get('enabled'))
+            return self.reply({'ok': True, 'listening': STATE['listening']})
 
         if p == '/api/bus/raw':
             if not self.guard():
@@ -501,11 +556,13 @@ class Handler(SimpleHTTPRequestHandler):
         elif name == 'wipe':
             GEARS.clear()
             publish_bus()
+        elif name == 'burst':
+            threading.Thread(target=run_burst, args=(int(arg or 600),), daemon=True).start()
         elif name == 'log':
             publish('log', {'level': 'warn', 'msg': 'no reply from A5 (QUERY STATUS)'})
         return self.reply({'ok': True, 'state': {k: STATE[k] for k in
                                                  ('powered', 'busy', 'force_busy', 'sse_full',
-                                                  'heartbeat_s')},
+                                                  'heartbeat_s', 'listening', 'rx_rate')},
                            'clients': len(CLIENTS)})
 
 
@@ -524,5 +581,6 @@ def apply_set(g, b):
 
 
 if __name__ == '__main__':
+    threading.Thread(target=run_traffic, daemon=True).start()
     print('stub gateway on http://127.0.0.1:%d serving %s' % (PORT, ROOT))
     ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever()

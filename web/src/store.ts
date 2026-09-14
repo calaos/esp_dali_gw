@@ -166,8 +166,8 @@ onEvent((event) => {
             break;
         }
         case 'rx':
-            // The passive frame monitor is M5. Accepting and dropping the event keeps the stream
-            // parser honest against a firmware that already sends it.
+            // `monitor.ts` owns these: they arrive far faster than a gear update and a commit here
+            // would re-render every screen that reads the bus.
             break;
     }
 });
