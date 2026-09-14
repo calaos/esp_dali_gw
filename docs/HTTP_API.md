@@ -1,10 +1,8 @@
 # HTTP API
 
-> **Incomplete.** This document is maintained alongside the implementation: a route is documented
-> here in the same commit that implements it. Routes land in **M1** (info, config, Wi-Fi scan, OTA,
-> reboot, factory reset, static assets) and **M2** (bus, gears, SSE), and the reference is
-> **completed in M4**. Until then, [SPEC.md §9](SPEC.md#9-http-api) is authoritative — this file
-> exists so milestones fill rows in rather than inventing structure.
+> **Complete for M4, and unverified on hardware.** Every route below is implemented and builds
+> clean, but no device has answered any of them: there has been no board, no DALI bus and no broker
+> during development. Treat the bus-facing routes in particular as untested against real gear.
 
 Served by `esp_http_server` on port 80. JSON bodies and results are **byte-identical to the MQTT
 payloads** — see [MQTT_API.md](MQTT_API.md). Optional HTTP Basic auth (`http.auth`) protects
@@ -32,7 +30,48 @@ Implemented in M1:
 | `GET /` and static assets | — | Embedded gzipped bundle, `Cache-Control: max-age=86400`, ETag = build hash. A path with no file extension is served the SPA entry point. |
 | any path, in AP mode | — | `302` to `http://192.168.4.1/` when the `Host` header is not one of ours, or when the path is an OS connectivity probe. |
 
-Landing in M2: `/api/bus*`, `/api/gears*`, `/api/groups*`, `/api/broadcast/set`, `/api/events`.
+### Bus
+
+| Method & path | Body | Result |
+|---|---|---|
+| `GET /api/bus` | — | `{"powered","busy","operation","progress","gear_count","last_scan"}`. `operation` and `progress` are `null` when idle. |
+| `POST /api/bus/scan` | `{"deep":false}` | **202** `{"ok":true,"data":{"started":true}}`. Progress arrives on the event stream; the final result arrives as an `event: result`. A deep scan additionally reads the config block and memory bank 0 of every gear, which is minutes of bus time. |
+| `POST /api/bus/commission` | `{"mode":"unaddressed"\|"all","confirm":true,"start_addr":0}` | **202**. `"all"` re-addresses the entire bus and is rejected without `confirm`. |
+| `POST /api/bus/cancel` | `{}` | `{"ok":true}`. Stops the running long operation at its next step. |
+| `POST /api/bus/check` | `{}` | Result whose `data` is `{"powered":bool,"any_reply":bool}`. |
+| `POST /api/bus/raw` | `{"frame":"FF08","send_twice":false,"expect_reply":false}` | Result whose `data` is `{"reply":int\|null}`. `frame` is 4 or 6 hex digits. Unrestricted by design and logged at WARN. |
+| `POST /api/bus/query` | `{"addr":3,"query":"actual_level"}` or `{"addr":3,"opcode":160}` | Result whose `data` is `{"reply":int\|null,"opcode":int}`. |
+
+### Gears and groups
+
+| Method & path | Body | Result |
+|---|---|---|
+| `GET /api/gears` | — | `{"gears":[…]}`, compact entries: `addr`, `name`, `present`, `level`, `on`, `status.raw`. |
+| `GET /api/gears/{addr}` | — | The full gear object of SPEC §7.3, including `config` and `identity` when they have been read. |
+| `POST /api/gears/{addr}/set` | `{"level":128}` · `{"level_pct":50,"fade_time":4}` · `{"on":true}` · `{"scene":2}` · `{"cmd":"up"}` · `{"mirek":300}` · `{"rgb":[254,0,0]}` · a bare number · `ON` / `OFF` | Synchronous, 2 s budget. |
+| `POST /api/groups/{n}/set` · `POST /api/broadcast/set` | same | same |
+| `POST /api/gears/{addr}/configure` | `{"min":85,"fade_time":4,"scene":{"2":128,"3":null},"group":{"add":[0],"remove":[5]}}` | Synchronous. `data.parameters` lists every parameter with `ok` or `mismatch`: each one is written and read back, and a partial write is the normal failure. |
+| `POST /api/gears/{addr}/identify` | `{}` | **202**. One frame on a DALI-2 gear; a blink sequence otherwise, which is why it is asynchronous. |
+| `POST /api/gears/{addr}/address` | `{"new_addr":7}` | Synchronous. Refused with `address_in_use` if a gear already answers there. |
+| `POST /api/gears/{addr}/remove_address` | `{}` | Synchronous. |
+| `PATCH /api/gears/{addr}` · `PATCH /api/groups/{n}` | `{"name":"Kitchen"}` | Registry and configuration only; never touches the bus. |
+
+A scene of `null` means "not programmed" (0xFF on the wire), which is not level 0.
+
+### Events
+
+`GET /api/events` is a Server-Sent Events stream. Event names: `gear`, `bus`, `progress`,
+`result`, `log`. A comment heartbeat is sent every 15 s.
+
+**At most three concurrent clients**; a fourth gets `503` with `error: "bus_busy"` rather than
+evicting an existing one. A client that stops reading is dropped rather than being allowed to stall
+the server, which runs a single worker task.
+
+### Authentication
+
+When `http.auth.enabled`, every route requires HTTP Basic credentials. The single exemption is the
+captive-portal redirect in AP mode: an OS connectivity probe cannot carry credentials, and a `401`
+makes the phone report the network as broken instead of opening the portal.
 
 ### Writing configuration
 
@@ -44,10 +83,6 @@ only a genuinely new string overwrites one.
 The reply distinguishes the two kinds of change: `mqtt_restart` means the client is restarted in
 place, `reboot_required` means the change (`wifi.*`, a `dali.*gpio*`, `http.auth`, `led.gpio`) only
 takes effect after `POST /api/reboot`.
-
-## Events (SSE)
-
-`GET /api/events`. TODO: event names, payloads, heartbeat and client-limit behaviour.
 
 ## Errors
 
