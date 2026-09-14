@@ -48,7 +48,7 @@ static void collect_info(gw_info_t *info)
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
-    snprintf(info->chip, sizeof(info->chip), "esp32c6 rev%d.%d", chip.revision / 100,
+    snprintf(info->chip, sizeof(info->chip), "%s rev%d.%d", CONFIG_IDF_TARGET, chip.revision / 100,
              chip.revision % 100);
 
     info->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);

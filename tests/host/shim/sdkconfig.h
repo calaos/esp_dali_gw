@@ -5,4 +5,6 @@
 #define CONFIG_GW_DALI_TX_GPIO 14
 #define CONFIG_GW_DALI_RX_GPIO 5
 #define CONFIG_GW_LED_GPIO 8
+/* The C6 ceiling: the host tests exercise the validator, not a particular chip. */
+#define CONFIG_GW_GPIO_MAX 30
 #define CONFIG_GW_AP_PASSWORD "dali12345"

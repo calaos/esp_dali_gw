@@ -1,9 +1,13 @@
 menu "esp_dali_gw"
 
-    comment "Hardware defaults for the Waveshare ESP32-C6-Pico + Pico-DALI2"
+    comment "Hardware defaults for the Waveshare Pico boards + Pico-DALI2"
+
+    comment "The Pico form factor fixes the physical pins, not the GPIO numbers: the same"
+    comment "Pico-DALI2 lands on different GPIOs on the C6-Pico and the S3-Pico."
 
     config GW_DALI_TX_GPIO
         int "DALI TX GPIO"
+        default 17 if IDF_TARGET_ESP32S3
         default 14
         help
             Drives the bus shorting MOSFET. LOW asserts the bus, HIGH releases it, so the
@@ -11,16 +15,19 @@ menu "esp_dali_gw"
 
     config GW_DALI_RX_GPIO
         int "DALI RX GPIO"
+        default 14 if IDF_TARGET_ESP32S3
         default 5
         help
             Bus receive through the optocoupler. HIGH is bus idle. invert_rx = false.
 
     config GW_LED_GPIO
         int "Status RGB LED GPIO"
+        default 21 if IDF_TARGET_ESP32S3
         default 8
 
     config GW_BUTTON_GPIO
         int "BOOT button GPIO"
+        default 0 if IDF_TARGET_ESP32S3
         default 9
         help
             Strapping pin: only ever read after boot. Held 5 s it triggers a factory reset.
@@ -31,6 +38,15 @@ menu "esp_dali_gw"
         help
             WPA2 password of the ESP-DALI-GW-<id> provisioning network. Changeable at runtime;
             this is only the value a factory-reset device comes up with.
+
+    config GW_GPIO_MAX
+        int "Highest usable GPIO number"
+        default 48 if IDF_TARGET_ESP32S3
+        default 30
+        help
+            Upper bound used when validating the configurable GPIOs. Lives here rather than in a
+            SOC header so that the configuration validator stays free of the IDF and testable on
+            the host.
 
     config GW_FACTORY_RESET_HOLD_MS
         int "Factory reset button hold time (ms)"

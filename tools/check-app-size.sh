@@ -3,11 +3,17 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-BIN=build/esp_dali_gw.bin
+BUILD_DIR=${BUILD_DIR:-build}
+BIN=$BUILD_DIR/esp_dali_gw.bin
 [ -f "$BIN" ] || { echo "$BIN missing; run idf.py build"; exit 1; }
 
-# Slot size comes from the partition table so the two can never drift apart.
-slot=$(awk -F, '/^ota_0/ { gsub(/ /, "", $5); print $5 }' partitions.csv)
+# Which partition table this build actually used: it differs per target (4 MB vs 16 MB boards), so
+# reading partitions.csv unconditionally would check the image against the wrong slot.
+table=$(sed -n 's/^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="\(.*\)"$/\1/p' \
+        "$BUILD_DIR/../sdkconfig" 2>/dev/null)
+[ -n "$table" ] && [ -f "$table" ] || table=partitions.csv
+
+slot=$(awk -F, '/^ota_0/ { gsub(/ /, "", $5); print $5 }' "$table")
 slot=$((slot))
 used=$(stat -c%s "$BIN")
 pct=$((used * 100 / slot))

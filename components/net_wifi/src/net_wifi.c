@@ -152,7 +152,7 @@ static void mdns_start(void)
     mdns_hostname_set(cfg->device.hostname);
     mdns_instance_name_set(cfg->device.name[0] != '\0' ? cfg->device.name : cfg->device.hostname);
 
-    mdns_txt_item_t txt[] = {{"board", "esp32c6"}, {"path", "/"}};
+    mdns_txt_item_t txt[] = {{"board", CONFIG_IDF_TARGET}, {"path", "/"}};
     err = mdns_service_add(NULL, "_http", "_tcp", 80, txt, sizeof(txt) / sizeof(txt[0]));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "mdns service: %s", esp_err_to_name(err));

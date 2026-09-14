@@ -6,8 +6,8 @@
 #include "app_config.h"
 #include "app_config_logic.h"
 
-/** Highest GPIO number on the ESP32-C6 (GPIO0..GPIO30). */
-#define GPIO_NUM_MAX_C6 30
+/** Highest usable GPIO, from Kconfig: it differs per chip and this file must stay IDF-free. */
+#define GW_GPIO_CEILING CONFIG_GW_GPIO_MAX
 
 /** WPA2 key material: 8..63 ASCII characters or a 64-character hex PSK. */
 #define PSK_MIN 8
@@ -113,7 +113,7 @@ static bool topic_ok(const char *s)
 
 static bool gpio_ok(int8_t gpio)
 {
-    return gpio >= 0 && gpio <= GPIO_NUM_MAX_C6;
+    return gpio >= 0 && gpio <= GW_GPIO_CEILING;
 }
 
 static esp_err_t validate_strings(const app_config_t *cfg, char *err_field, size_t err_len)

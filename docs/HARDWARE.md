@@ -59,3 +59,28 @@ The firmware treats an unpowered bus as a **normal detectable condition**, not a
 the LED blinks red, and everything else keeps running.
 
 TODO: photo of a bench setup with a DIN-rail DALI PSU.
+
+## The ESP32-S3-Pico
+
+The same Pico-DALI2 also fits the Waveshare **ESP32-S3-Pico**, which shares the Raspberry Pi Pico
+form factor. The form factor fixes the *physical* pins, not the GPIO numbers, so the transceiver
+lands on different GPIOs:
+
+| Signal | C6-Pico | S3-Pico |
+|---|---|---|
+| DALI TX | GPIO14 | **GPIO17** |
+| DALI RX | GPIO5 | **GPIO14** |
+| RGB status LED | GPIO8 | **GPIO21** |
+| BOOT button | GPIO9 | **GPIO0** |
+| Flash | 4 MB | 16 MB |
+| PSRAM | none | 2 MB octal, on GPIO33-37 |
+
+These are Kconfig defaults selected by the build target, and are still overridable at runtime in
+`dali.tx_gpio` / `dali.rx_gpio` / `led.gpio`. The 16 MB board uses `partitions-16mb.csv`, whose OTA
+slots are 4 MB rather than 1.9 MB.
+
+PSRAM is deliberately left disabled: nothing needs it, and enabling it reserves GPIO33-37 and
+lengthens the boot.
+
+**Not verified on hardware.** The S3 pin numbers come from the Waveshare documentation, and no
+S3-Pico has run this firmware.

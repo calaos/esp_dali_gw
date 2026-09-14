@@ -1,0 +1,11 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# The S3-Pico carries 16 MB, so the OTA slots do not have to be squeezed into 4 MB.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-16mb.csv"
+
+# Console on the native USB-serial-JTAG, as on the C6-Pico: the board exposes only USB-C.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# 2 MB of octal PSRAM on GPIO33-37. Nothing needs it today, and enabling it would reserve those
+# pins and slow the boot; left off deliberately rather than by omission.
