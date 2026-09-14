@@ -370,6 +370,77 @@ static void op_remove_short_address(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_resu
     res->ok = true;
 }
 
+/** Map our target onto the driver's address type; the driver takes them as separate arguments. */
+static dali_addr_type_t driver_addr_type(gw_target_type_t type)
+{
+    switch (type) {
+        case GW_TARGET_GROUP:
+            return DALI_ADDR_GROUP;
+        case GW_TARGET_BROADCAST:
+            return DALI_ADDR_BROADCAST;
+        case GW_TARGET_SHORT:
+        default:
+            return DALI_ADDR_SHORT;
+    }
+}
+
+static void op_color(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
+{
+    set_action(res, "color");
+
+    /*
+     * Refused rather than attempted on a gear we know is not DT8: a Part 209 command reaches a
+     * DT6 gear as an unrelated application-extended opcode, and the result is unpredictable.
+     * Group and broadcast targets cannot be checked, so they are allowed through.
+     */
+    if (cmd->target.type == GW_TARGET_SHORT && cmd->target.addr < GW_MAX_GEARS) {
+        const gw_gear_t *gear = &ctx->gears[cmd->target.addr];
+        if (gear->present && gear->device_type_count > 0 && !gear->dt8.supported) {
+            fail(res, GW_ERR_UNSUPPORTED, "this gear is not DT8");
+            return;
+        }
+    }
+
+    dali_color_mode_t mode;
+    dali_color_val_t val;
+    memset(&val, 0, sizeof(val));
+
+    switch (cmd->args.color.kind) {
+        case GW_COLOR_MIREK:
+            mode = DALI_COLOR_CCT;
+            val.cct.mirek = cmd->args.color.mirek;
+            break;
+        case GW_COLOR_RGB:
+            mode = DALI_COLOR_RGB;
+            val.rgb.r = cmd->args.color.channels[0];
+            val.rgb.g = cmd->args.color.channels[1];
+            val.rgb.b = cmd->args.color.channels[2];
+            break;
+        case GW_COLOR_RGBWAF:
+            mode = DALI_COLOR_RGBWAF;
+            val.rgbwaf.r = cmd->args.color.channels[0];
+            val.rgbwaf.g = cmd->args.color.channels[1];
+            val.rgbwaf.b = cmd->args.color.channels[2];
+            val.rgbwaf.w = cmd->args.color.channels[3];
+            val.rgbwaf.a = cmd->args.color.channels[4];
+            val.rgbwaf.f = cmd->args.color.channels[5];
+            break;
+        case GW_COLOR_NONE:
+        default:
+            fail(res, GW_ERR_INVALID_ARG, "no colour given");
+            return;
+    }
+
+    esp_err_t err = dali_master_set_color(ctx->master, driver_addr_type(cmd->target.type),
+                                          cmd->target.addr, mode, val, BUS_TX_TIMEOUT_MS);
+    gw_event_post(GW_EVENT_BUS_ACTIVITY, NULL, 0);
+    if (err != ESP_OK) {
+        fail(res, gw_api_err_from_esp(err), "colour command not sent");
+        return;
+    }
+    res->ok = true;
+}
+
 void bus_exec_short(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
 {
     int64_t started = now_ms();
@@ -410,9 +481,7 @@ void bus_exec_short(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
             op_remove_short_address(ctx, cmd, res);
             break;
         case GW_CMD_COLOR:
-            // TODO(M4): dali_master_set_color() once the registry knows which gears are DT8.
-            set_action(res, "color");
-            fail(res, GW_ERR_UNSUPPORTED, "DT8 colour lands in M4");
+            op_color(ctx, cmd, res);
             break;
         default:
             set_action(res, "error");
@@ -437,6 +506,7 @@ enum {
     SCAN_STATUS,
     SCAN_LEVEL,
     SCAN_DEVICE_TYPE,
+    SCAN_DEVICE_TYPE_NEXT,
     SCAN_VERSION,
     SCAN_DEEP,
     SCAN_SUBSTEP_COUNT,
@@ -555,7 +625,8 @@ static void step_scan(bus_ctx_t *ctx, bool *done, gw_result_t *res)
                 ctx->op.substep = SCAN_PRESENT;
                 break;
             }
-            /* TODO(M4): unix seconds need SNTP; before that this is uptime-relative. */
+            /* Meaningful only once SNTP has set the clock; before that it is near zero,
+             * which the UI renders as "never" rather than as 1970. */
             gear->last_seen = time(NULL);
             ctx->op.found++;
             ctx->op.substep = SCAN_STATUS;
@@ -574,12 +645,30 @@ static void step_scan(bus_ctx_t *ctx, bool *done, gw_result_t *res)
         case SCAN_DEVICE_TYPE:
             bus_transact(ctx, target, true, DALI_CMD_QUERY_DEVICE_TYPE, false, &reply);
             gear->device_type_count = 0;
-            if (DALI_RESULT_IS_VALID(reply) && reply != 0xFF) {
+            gear->dt8.supported = false;
+            if (DALI_RESULT_IS_VALID(reply)) {
+                if (reply == 0xFF) {
+                    /* Several types: enumerate them with QUERY NEXT DEVICE TYPE. */
+                    ctx->op.substep = SCAN_DEVICE_TYPE_NEXT;
+                    break;
+                }
                 gear->device_types[0] = (uint8_t)reply;
                 gear->device_type_count = 1;
                 gear->dt8.supported = (reply == 8);
             }
-            // TODO(M4): reply == 0xFF means several types; loop QUERY NEXT DEVICE TYPE.
+            ctx->op.substep = SCAN_VERSION;
+            break;
+        case SCAN_DEVICE_TYPE_NEXT:
+            bus_transact(ctx, target, true, OPCODE_QUERY_NEXT_DT, false, &reply);
+            /* 0xFE terminates the list; anything else is one more supported device type. */
+            if (DALI_RESULT_IS_VALID(reply) && reply != 0xFE &&
+                gear->device_type_count < sizeof(gear->device_types)) {
+                gear->device_types[gear->device_type_count++] = (uint8_t)reply;
+                if (reply == 8) {
+                    gear->dt8.supported = true;
+                }
+                break; /* ask again */
+            }
             ctx->op.substep = SCAN_VERSION;
             break;
         case SCAN_VERSION:

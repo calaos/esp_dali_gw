@@ -35,6 +35,9 @@ typedef struct {
     bus_reply_t *reply; /**< NULL for fire-and-forget submissions */
 } bus_msg_t;
 
+/** Next automatic poll, in esp_timer units; 0 while polling is disabled. */
+static int64_t s_next_poll_us;
+
 static QueueHandle_t s_queue;
 static SemaphoreHandle_t s_registry_lock;
 static dali_bus_config_t s_cfg;
@@ -333,9 +336,18 @@ static void bus_task(void *arg)
             continue;
         }
 
+        /*
+         * Wait until the next poll is due rather than ticking every second: with polling disabled
+         * the task sleeps until something is actually submitted.
+         */
+        TickType_t wait = portMAX_DELAY;
+        if (s_next_poll_us != 0) {
+            int64_t remaining_ms = (s_next_poll_us - esp_timer_get_time()) / 1000;
+            wait = remaining_ms > 0 ? pdMS_TO_TICKS(remaining_ms) : 0;
+        }
+
         bus_msg_t msg;
-        /* A bounded wait rather than portMAX_DELAY so the periodic poll can run when idle. */
-        if (xQueueReceive(s_queue, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if (xQueueReceive(s_queue, &msg, wait) == pdTRUE) {
             if (msg.cmd.kind == GW_CMD_CANCEL) {
                 gw_result_t res = {.id = msg.cmd.id, .ok = true};
                 strlcpy(res.action, "cancel", sizeof(res.action));
@@ -344,6 +356,18 @@ static void bus_task(void *arg)
                 start_long(&msg);
             } else {
                 run_command(&msg);
+            }
+            continue;
+        }
+
+        /* Nothing queued and the poll fell due. A poll is skipped silently when the bus is
+         * unpowered: 64 timeouts every interval would fill the log and buy nothing. */
+        if (s_next_poll_us != 0 && esp_timer_get_time() >= s_next_poll_us) {
+            s_next_poll_us = esp_timer_get_time() + (int64_t)s_cfg.poll_interval_s * 1000000;
+            if (s_ctx.powered) {
+                bus_msg_t poll = {.cmd = {.kind = GW_CMD_POLL_ALL, .origin = GW_ORIGIN_INTERNAL},
+                                  .reply = NULL};
+                start_long(&poll);
             }
         }
     }
@@ -388,7 +412,17 @@ esp_err_t dali_bus_init(const dali_bus_config_t *cfg)
         xTaskCreate(bus_task, "dali_bus", BUS_TASK_STACK, NULL, BUS_TASK_PRIO, NULL) == pdPASS,
         ESP_ERR_NO_MEM, TAG, "task create");
 
-    ESP_LOGI(TAG, "bus task up (tx=%d rx=%d)", s_cfg.tx_gpio, s_cfg.rx_gpio);
+    if (s_cfg.poll_interval_s > 0) {
+        s_next_poll_us = esp_timer_get_time() + (int64_t)s_cfg.poll_interval_s * 1000000;
+    }
+
+    if (s_cfg.scan_on_boot) {
+        gw_cmd_t scan = {.kind = GW_CMD_SCAN, .origin = GW_ORIGIN_INTERNAL};
+        dali_bus_submit(&scan);
+    }
+
+    ESP_LOGI(TAG, "bus task up (tx=%d rx=%d, poll %us)", s_cfg.tx_gpio, s_cfg.rx_gpio,
+             s_cfg.poll_interval_s);
     return ESP_OK;
 }
 

@@ -12,6 +12,7 @@
 #include "gw_api.h"
 #include "http_iface.h"
 #include "net_wifi.h"
+#include "http_auth.h"
 #include "http_bus.h"
 #include "http_routes.h"
 #include "http_sse.h"
@@ -126,9 +127,15 @@ static esp_err_t redirect_to_portal(httpd_req_t *req)
     return httpd_resp_send(req, NULL, 0);
 }
 
+/** A client that arrived through the portal has not seen the UI yet and cannot have logged in. */
+static bool captive_redirect_due(httpd_req_t *req)
+{
+    return net_wifi_ap_active() && (is_captive_probe(req->uri) || !host_is_ours(req));
+}
+
 static esp_err_t static_get(httpd_req_t *req)
 {
-    if (net_wifi_ap_active() && (is_captive_probe(req->uri) || !host_is_ours(req))) {
+    if (captive_redirect_due(req)) {
         return redirect_to_portal(req);
     }
 
@@ -162,6 +169,29 @@ static esp_err_t static_get(httpd_req_t *req)
     return httpd_resp_send(req, (const char *)asset->data, asset->size);
 }
 
+/** What a registered route really points at; httpd's user_ctx carries it. */
+typedef struct {
+    esp_err_t (*fn)(httpd_req_t *req);
+} route_handler_t;
+
+/**
+ * Auth is enforced in one place: a per-handler check is one new route away from being forgotten.
+ *
+ * The only exemption is the captive-portal redirect (SPEC 9). An OS connectivity probe cannot
+ * carry credentials, and answering it with a 401 makes the phone decide the network is broken
+ * instead of opening the portal sheet.
+ */
+static esp_err_t authed(httpd_req_t *req)
+{
+    if (captive_redirect_due(req)) {
+        return redirect_to_portal(req);
+    }
+    if (!http_auth_ok(req)) {
+        return ESP_OK; /* the challenge has already been sent */
+    }
+    return ((const route_handler_t *)req->user_ctx)->fn(req);
+}
+
 esp_err_t http_iface_init(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -173,94 +203,129 @@ esp_err_t http_iface_init(void)
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &cfg), TAG, "httpd_start");
 
+    static const route_handler_t ctx_info_get = {info_get};
+    static const route_handler_t ctx_http_route_config_get = {http_route_config_get};
+    static const route_handler_t ctx_http_route_config_put = {http_route_config_put};
+    static const route_handler_t ctx_http_route_config_export = {http_route_config_export};
+    static const route_handler_t ctx_http_route_config_import = {http_route_config_import};
+    static const route_handler_t ctx_http_route_wifi_scan = {http_route_wifi_scan};
+    static const route_handler_t ctx_http_route_ota = {http_route_ota};
+    static const route_handler_t ctx_http_route_reboot = {http_route_reboot};
+    static const route_handler_t ctx_http_route_factory_reset = {http_route_factory_reset};
+    static const route_handler_t ctx_http_sse_open = {http_sse_open};
+    static const route_handler_t ctx_http_route_bus_get = {http_route_bus_get};
+    static const route_handler_t ctx_http_route_bus_scan = {http_route_bus_scan};
+    static const route_handler_t ctx_http_route_bus_commission = {http_route_bus_commission};
+    static const route_handler_t ctx_http_route_bus_cancel = {http_route_bus_cancel};
+    static const route_handler_t ctx_http_route_bus_check = {http_route_bus_check};
+    static const route_handler_t ctx_http_route_bus_raw = {http_route_bus_raw};
+    static const route_handler_t ctx_http_route_bus_query = {http_route_bus_query};
+    static const route_handler_t ctx_http_route_gears_get = {http_route_gears_get};
+    static const route_handler_t ctx_http_route_gear_post = {http_route_gear_post};
+    static const route_handler_t ctx_http_route_group_post = {http_route_group_post};
+    static const route_handler_t ctx_http_route_broadcast_set = {http_route_broadcast_set};
+    static const route_handler_t ctx_http_route_rename = {http_route_rename};
+    static const route_handler_t ctx_http_route_gear_get = {http_route_gear_get};
+    static const route_handler_t ctx_static_get = {static_get};
+
     static const httpd_uri_t routes[] = {
-        {.uri = "/api/info", .method = HTTP_GET, .handler = info_get, .user_ctx = NULL},
+        {.uri = "/api/info",
+         .method = HTTP_GET,
+         .handler = authed,
+         .user_ctx = (void *)&ctx_info_get},
         {.uri = "/api/config",
          .method = HTTP_GET,
-         .handler = http_route_config_get,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_config_get},
         {.uri = "/api/config",
          .method = HTTP_PUT,
-         .handler = http_route_config_put,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_config_put},
         {.uri = "/api/config/export",
          .method = HTTP_POST,
-         .handler = http_route_config_export,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_config_export},
         {.uri = "/api/config/import",
          .method = HTTP_POST,
-         .handler = http_route_config_import,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_config_import},
         {.uri = "/api/wifi/scan",
          .method = HTTP_POST,
-         .handler = http_route_wifi_scan,
-         .user_ctx = NULL},
-        {.uri = "/api/ota", .method = HTTP_POST, .handler = http_route_ota, .user_ctx = NULL},
-        {.uri = "/api/reboot", .method = HTTP_POST, .handler = http_route_reboot, .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_wifi_scan},
+        {.uri = "/api/ota",
+         .method = HTTP_POST,
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_ota},
+        {.uri = "/api/reboot",
+         .method = HTTP_POST,
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_reboot},
         {.uri = "/api/factory_reset",
          .method = HTTP_POST,
-         .handler = http_route_factory_reset,
-         .user_ctx = NULL},
-        {.uri = "/api/events", .method = HTTP_GET, .handler = http_sse_open, .user_ctx = NULL},
-
-        {.uri = "/api/bus", .method = HTTP_GET, .handler = http_route_bus_get, .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_factory_reset},
+        {.uri = "/api/events",
+         .method = HTTP_GET,
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_sse_open},
+        {.uri = "/api/bus",
+         .method = HTTP_GET,
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_get},
         {.uri = "/api/bus/scan",
          .method = HTTP_POST,
-         .handler = http_route_bus_scan,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_scan},
         {.uri = "/api/bus/commission",
          .method = HTTP_POST,
-         .handler = http_route_bus_commission,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_commission},
         {.uri = "/api/bus/cancel",
          .method = HTTP_POST,
-         .handler = http_route_bus_cancel,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_cancel},
         {.uri = "/api/bus/check",
          .method = HTTP_POST,
-         .handler = http_route_bus_check,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_check},
         {.uri = "/api/bus/raw",
          .method = HTTP_POST,
-         .handler = http_route_bus_raw,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_raw},
         {.uri = "/api/bus/query",
          .method = HTTP_POST,
-         .handler = http_route_bus_query,
-         .user_ctx = NULL},
-
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_bus_query},
         {.uri = "/api/gears",
          .method = HTTP_GET,
-         .handler = http_route_gears_get,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_gears_get},
         {.uri = "/api/gears/*",
          .method = HTTP_POST,
-         .handler = http_route_gear_post,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_gear_post},
         {.uri = "/api/groups/*",
          .method = HTTP_POST,
-         .handler = http_route_group_post,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_group_post},
         {.uri = "/api/broadcast/set",
          .method = HTTP_POST,
-         .handler = http_route_broadcast_set,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_broadcast_set},
         {.uri = "/api/gears/*",
          .method = HTTP_PATCH,
-         .handler = http_route_rename,
-         .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_rename},
         {.uri = "/api/groups/*",
          .method = HTTP_PATCH,
-         .handler = http_route_rename,
-         .user_ctx = NULL},
-        /* After the more specific per-gear routes so this wildcard cannot shadow them. */
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_rename},
         {.uri = "/api/gears/*",
          .method = HTTP_GET,
-         .handler = http_route_gear_get,
-         .user_ctx = NULL},
-
-        /* Last: the wildcard would otherwise swallow every GET above it. */
-        {.uri = "/*", .method = HTTP_GET, .handler = static_get, .user_ctx = NULL},
+         .handler = authed,
+         .user_ctx = (void *)&ctx_http_route_gear_get},
+        {.uri = "/*", .method = HTTP_GET, .handler = authed, .user_ctx = (void *)&ctx_static_get},
     };
     _Static_assert(sizeof(routes) / sizeof(routes[0]) <= HTTP_MAX_HANDLERS,
                    "more routes than httpd is configured to hold");
