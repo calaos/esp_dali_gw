@@ -37,6 +37,19 @@ static void test_result_free_is_safe_on_a_zeroed_struct(void)
 }
 
 /* /api/info and the MQTT status topic must expose the same status fields (SPEC 8.1, 9). */
+/* An AP-only device has no association, so rssi must be absent rather than a fabricated 0. */
+static void test_status_omits_rssi_in_ap_mode(void)
+{
+    gw_info_t info;
+    memset(&info, 0, sizeof(info));
+    strcpy(info.mode, "ap");
+    cJSON *status = gw_api_status_to_json(&info);
+    TEST_ASSERT_NOT_NULL(status);
+    TEST_ASSERT_NULL(cJSON_GetObjectItem(status, "rssi"));
+    TEST_ASSERT_EQUAL(6, cJSON_GetArraySize(status));
+    cJSON_Delete(status);
+}
+
 static void test_status_and_info_agree(void)
 {
     gw_info_t info;
@@ -55,18 +68,23 @@ static void test_status_and_info_agree(void)
     TEST_ASSERT_NOT_NULL(status);
     TEST_ASSERT_NOT_NULL(full);
 
-    const char *shared[] = {"state", "fw", "idf", "ip", "rssi", "uptime_s", "mac"};
-    for (size_t i = 0; i < sizeof(shared) / sizeof(shared[0]); i++) {
-        cJSON *a = cJSON_GetObjectItem(status, shared[i]);
-        cJSON *b = cJSON_GetObjectItem(full, shared[i]);
-        TEST_ASSERT_NOT_NULL_MESSAGE(a, shared[i]);
-        TEST_ASSERT_NOT_NULL_MESSAGE(b, shared[i]);
-        TEST_ASSERT_TRUE_MESSAGE(cJSON_Compare(a, b, true), shared[i]);
-    }
+    /* SPEC 9: /api/info is the status object plus build info, free heap and mode -- the status
+     * block is nested, not flattened, and the web client's Info type depends on that. */
+    cJSON *nested = cJSON_GetObjectItem(full, "status");
+    TEST_ASSERT_NOT_NULL(nested);
+    TEST_ASSERT_TRUE(cJSON_Compare(status, nested, true));
 
-    /* The status topic carries nothing beyond those seven fields. */
+    const char *required[] = {"state", "fw", "idf", "ip", "rssi", "uptime_s", "mac"};
+    for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
+        TEST_ASSERT_NOT_NULL_MESSAGE(cJSON_GetObjectItem(status, required[i]), required[i]);
+    }
     TEST_ASSERT_EQUAL(7, cJSON_GetArraySize(status));
+
+    cJSON *build = cJSON_GetObjectItem(full, "build");
+    TEST_ASSERT_NOT_NULL(build);
+    TEST_ASSERT_NOT_NULL(cJSON_GetObjectItem(build, "version"));
     TEST_ASSERT_NOT_NULL(cJSON_GetObjectItem(full, "mode"));
+    TEST_ASSERT_NOT_NULL(cJSON_GetObjectItem(full, "free_heap"));
 
     cJSON_Delete(status);
     cJSON_Delete(full);
@@ -78,4 +96,5 @@ void test_gw_api_run(void)
     RUN_TEST(test_err_from_esp_never_invents_a_code);
     RUN_TEST(test_result_free_is_safe_on_a_zeroed_struct);
     RUN_TEST(test_status_and_info_agree);
+    RUN_TEST(test_status_omits_rssi_in_ap_mode);
 }
