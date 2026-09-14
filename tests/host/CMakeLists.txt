@@ -24,6 +24,7 @@ endforeach()
 add_executable(esp_dali_gw_tests
     test_main.c
     test_gw_api.c
+    test_gw_api_wire.c
     test_gw_api_config.c
     test_app_config.c
     "${REPO}/components/gw_api/src/gw_api.c"

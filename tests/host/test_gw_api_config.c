@@ -199,8 +199,54 @@ static void test_structurally_wrong_input_is_rejected(void)
                             "device.hostname");
 }
 
+/*
+ * A never-set password must not come back masked: the UI would then offer to "keep the stored
+ * value" for a credential that does not exist, and there would be no way to tell the two apart.
+ */
+static void test_unset_secret_is_empty_not_masked(void)
+{
+    app_config_t cfg;
+    app_config_defaults(&cfg);
+    TEST_ASSERT_EQUAL_STRING("", cfg.wifi.password);
+    strcpy(cfg.mqtt.password, "brokerpass");
+
+    cJSON *doc = gw_api_config_to_json(&cfg, false);
+    TEST_ASSERT_NOT_NULL(doc);
+
+    const cJSON *wifi = cJSON_GetObjectItem(doc, "wifi");
+    const cJSON *mqtt = cJSON_GetObjectItem(doc, "mqtt");
+    TEST_ASSERT_EQUAL_STRING("", cJSON_GetStringValue(cJSON_GetObjectItem(wifi, "password")));
+    TEST_ASSERT_EQUAL_STRING(APP_CONFIG_SECRET_MASK,
+                             cJSON_GetStringValue(cJSON_GetObjectItem(mqtt, "password")));
+
+    cJSON_Delete(doc);
+}
+
+/* The web UI sends one nested leaf; a shallow merge would drop the sibling secrets with it. */
+static void test_partial_patch_keeps_siblings(void)
+{
+    app_config_t cfg;
+    app_config_defaults(&cfg);
+    strcpy(cfg.wifi.ssid, "HomeNet");
+    strcpy(cfg.wifi.password, "supersecret");
+    strcpy(cfg.mqtt.password, "brokerpass");
+
+    cJSON *patch = cJSON_Parse("{\"wifi\":{\"ssid\":\"OtherNet\"}}");
+    TEST_ASSERT_NOT_NULL(patch);
+    char field[64] = {0};
+    TEST_ASSERT_EQUAL(ESP_OK, gw_api_config_from_json(patch, &cfg, field, sizeof(field)));
+    cJSON_Delete(patch);
+
+    TEST_ASSERT_EQUAL_STRING("OtherNet", cfg.wifi.ssid);
+    TEST_ASSERT_EQUAL_STRING("supersecret", cfg.wifi.password);
+    TEST_ASSERT_EQUAL_STRING("brokerpass", cfg.mqtt.password);
+    TEST_ASSERT_EQUAL(60, cfg.wifi.fallback_ap_timeout_s);
+}
+
 void test_gw_api_config_run(void)
 {
+    RUN_TEST(test_unset_secret_is_empty_not_masked);
+    RUN_TEST(test_partial_patch_keeps_siblings);
     RUN_TEST(test_round_trip_preserves_every_field);
     RUN_TEST(test_secrets_are_masked_unless_exported);
     RUN_TEST(test_masked_secret_keeps_the_stored_value);
