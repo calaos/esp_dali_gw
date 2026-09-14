@@ -51,3 +51,18 @@ Exactly one FreeRTOS task, `dali_bus`, owns the bus and is the **only** caller o
 - **Cost: every bus interaction is asynchronous from the adapter's point of view.** Even a
   conceptually trivial `set_level` is enqueue → wait for event or `reply_q`, with correlation IDs to
   match results to requests. Both adapters and the web UI carry that machinery.
+
+## Known departure from this decision
+
+The registry mutex is currently held by the bus task for the whole of a command or a long-operation
+step, which includes the DALI transaction itself. A reader — `dali_bus_get_status()` from an httpd
+worker, or `dali_bus_get_gear()` from the event handler that feeds the SSE stream — can therefore
+block for the length of one transaction, roughly 60 ms and up to about 110 ms for a send-twice.
+
+That is exactly the kind of stall this ADR set out to avoid: it is bounded and it is not a deadlock,
+but an adapter waiting on the bus is the thing the design forbids. The fix is to narrow the lock to
+the registry mutations themselves rather than the transaction around them, which means taking it at
+each write site instead of once per step.
+
+It is recorded rather than done because it touches the core of the bus task and nothing has yet run
+on hardware; a refactor of that path is better made once there is a bench to prove it against.
