@@ -1,0 +1,631 @@
+/*
+ * Design system foundation. Everything below the "Base elements" heading may only reference the
+ * tokens above it, so a theme is one set of custom-property overrides and nothing else.
+ *
+ * Rationale, sources for the Calaos palette and the verified contrast table: web/DESIGN.md.
+ */
+
+/* ------------------------------------------------------------------ colour */
+
+:root {
+    color-scheme: light dark;
+
+    /* Logo colours. Fixed across themes: a logotype does not re-theme. */
+    --c-brand: #3ab4d7;
+    --c-brand-light: #8cd3e7;
+
+    /* Light theme. Neutrals are cooled towards the accent's hue rather than pure grey. */
+    --c-bg: #eef2f4;
+    --c-surface: #ffffff;
+    --c-raised: #f7f9fa;
+
+    /* Hairline between two filled surfaces: the fill difference already marks the edge, so this
+       is exempt from WCAG 1.4.11. Anything that is the *only* boundary of a control — input
+       outlines, slider rails, checkbox frames — must use --c-border-strong, which clears 3:1. */
+    --c-border: #ccd5d9;
+    --c-border-strong: #76858b;
+
+    --c-text: #101619;
+    --c-text-muted: #55646a;
+
+    --c-accent: #0b7391;
+    --c-accent-hover: #095c74;
+    --c-accent-active: #074a5e;
+    --c-on-accent: #ffffff;
+
+    --c-ok: #137a52;
+    --c-ok-bg: #dff2e8;
+    --c-warn: #8a5606;
+    --c-warn-bg: #fbeedb;
+    --c-danger: #bf2f28;
+    --c-danger-hover: #a5261f;
+    --c-danger-active: #8c1e18;
+    --c-danger-bg: #fce9e7;
+    --c-on-danger: #ffffff;
+    --c-offline: #55646a;
+    --c-offline-bg: #e7ecee;
+    --c-busy: #0b7391;
+    --c-busy-bg: #dcf0f6;
+
+    --c-focus: var(--c-accent);
+
+    --shadow-1: 0 1px 2px rgb(16 22 25 / 0.08);
+    --shadow-2: 0 6px 20px -6px rgb(16 22 25 / 0.22);
+}
+
+/* Dark is the theme the identity is drawn for; light is the fallback definition layer above. */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        --c-bg: #0e1214;
+        --c-surface: #171d20;
+        --c-raised: #1f262a;
+        --c-border: #333e43;
+        --c-border-strong: #6b797f;
+
+        --c-text: #eef3f5;
+        --c-text-muted: #9fb0b6;
+
+        --c-accent: #45c0e0;
+        --c-accent-hover: #63cbe7;
+        --c-accent-active: #2fa8c9;
+        --c-on-accent: #06181e;
+
+        --c-ok: #4fc48a;
+        --c-ok-bg: #12281f;
+        --c-warn: #e7a84e;
+        --c-warn-bg: #2b2113;
+        --c-danger: #f0716b;
+        --c-danger-hover: #f48a85;
+        --c-danger-active: #d95a54;
+        --c-danger-bg: #2e1817;
+        --c-on-danger: #1a0c0b;
+        --c-offline: #8d9ca2;
+        --c-offline-bg: #20272a;
+        --c-busy: #45c0e0;
+        --c-busy-bg: #0d2830;
+
+        /* Depth in dark comes from surface lightness and the hairline, not from drop shadows. */
+        --shadow-1: none;
+        --shadow-2: 0 8px 24px -8px rgb(0 0 0 / 0.6);
+    }
+}
+
+:root[data-theme='dark'] {
+    --c-bg: #0e1214;
+    --c-surface: #171d20;
+    --c-raised: #1f262a;
+    --c-border: #333e43;
+    --c-border-strong: #6b797f;
+
+    --c-text: #eef3f5;
+    --c-text-muted: #9fb0b6;
+
+    --c-accent: #45c0e0;
+    --c-accent-hover: #63cbe7;
+    --c-accent-active: #2fa8c9;
+    --c-on-accent: #06181e;
+
+    --c-ok: #4fc48a;
+    --c-ok-bg: #12281f;
+    --c-warn: #e7a84e;
+    --c-warn-bg: #2b2113;
+    --c-danger: #f0716b;
+    --c-danger-hover: #f48a85;
+    --c-danger-active: #d95a54;
+    --c-danger-bg: #2e1817;
+    --c-on-danger: #1a0c0b;
+    --c-offline: #8d9ca2;
+    --c-offline-bg: #20272a;
+    --c-busy: #45c0e0;
+    --c-busy-bg: #0d2830;
+
+    --shadow-1: none;
+    --shadow-2: 0 8px 24px -8px rgb(0 0 0 / 0.6);
+}
+
+:root[data-theme='dark'] {
+    color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+    color-scheme: light;
+}
+
+/* -------------------------------------------------------------- typography */
+
+:root {
+    /* Ubuntu is the Calaos face and is present on Calaos OS and on the Linux wall panels, so it
+       renders for free there. No @font-face: the device serves this with no Internet. */
+    --font-sans: Ubuntu, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+        sans-serif;
+    --font-mono: 'Ubuntu Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+        'Liberation Mono', monospace;
+
+    /* 1.2 ratio either side of 16px: small steps, because the config tables are dense. */
+    --text-xs: 0.6875rem;
+    --text-sm: 0.8125rem;
+    --text-md: 1rem;
+    --text-lg: 1.1875rem;
+    --text-xl: 1.4375rem;
+    --text-2xl: 1.75rem;
+
+    --leading-tight: 1.2;
+    --leading-data: 1.35;
+    --leading-normal: 1.5;
+
+    --weight-normal: 400;
+    --weight-medium: 500;
+    --weight-bold: 700;
+
+    --tracking-tight: -0.015em;
+    --tracking-wide: 0.09em;
+
+    /* Prose only. Data columns and tables set their own width. */
+    --measure: 68ch;
+}
+
+/* ------------------------------------------------- space, shape, elevation */
+
+:root {
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+    --space-12: 3rem;
+
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-pill: 999px;
+
+    --border: 1px solid var(--c-border);
+    --border-strong: 1px solid var(--c-border-strong);
+
+    /* Semantic edge marker on panels and cards. See .panel. */
+    --rail-width: 3px;
+
+    /* Pointer targets never go below this, phone or not. */
+    --control-h: 2.75rem;
+    --control-h-sm: 2rem;
+
+    --page-max: 60rem;
+}
+
+/* ------------------------------------------------------------------ motion */
+
+:root {
+    --dur-fast: 120ms;
+    --dur-base: 180ms;
+    --dur-slow: 320ms;
+    --ease-out: cubic-bezier(0.2, 0.8, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --press-scale: 0.96;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --dur-fast: 1ms;
+        --dur-base: 1ms;
+        --dur-slow: 1ms;
+        --press-scale: 1;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* ---------------------------------------------------------- base elements */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--c-bg);
+    color: var(--c-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-md);
+    line-height: var(--leading-normal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4 {
+    margin: 0 0 var(--space-2);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-tight);
+    letter-spacing: var(--tracking-tight);
+}
+
+h1 {
+    font-size: var(--text-xl);
+}
+
+h2 {
+    font-size: var(--text-lg);
+}
+
+h3,
+h4 {
+    font-size: var(--text-md);
+}
+
+p {
+    margin: 0 0 var(--space-3);
+    max-width: var(--measure);
+}
+
+p:last-child {
+    margin-bottom: 0;
+}
+
+a {
+    color: var(--c-accent);
+    text-underline-offset: 0.15em;
+    text-decoration-thickness: 1px;
+}
+
+a:hover {
+    color: var(--c-accent-hover);
+}
+
+code,
+kbd,
+samp,
+pre {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+}
+
+img,
+svg {
+    display: block;
+    max-width: 100%;
+}
+
+hr {
+    height: 0;
+    margin: var(--space-6) 0;
+    border: 0;
+    border-top: var(--border);
+}
+
+:focus-visible {
+    outline: 2px solid var(--c-focus);
+    outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ forms */
+
+label {
+    display: block;
+    margin-bottom: var(--space-1);
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+}
+
+input,
+select,
+textarea,
+button {
+    font: inherit;
+    color: inherit;
+}
+
+input:not([type='checkbox'], [type='radio'], [type='range']),
+select,
+textarea {
+    width: 100%;
+    min-height: var(--control-h);
+    padding: 0 var(--space-3);
+    border: var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--c-surface);
+    transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+textarea {
+    padding: var(--space-2) var(--space-3);
+    line-height: var(--leading-normal);
+    resize: vertical;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+    border-color: var(--c-accent);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled,
+button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+::placeholder {
+    color: var(--c-text-muted);
+    opacity: 1;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+    width: 1.125rem;
+    height: 1.125rem;
+    accent-color: var(--c-accent);
+}
+
+input[type='range'] {
+    width: 100%;
+    height: var(--control-h);
+    accent-color: var(--c-accent);
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: var(--control-h);
+    padding: 0 var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        background-color var(--dur-fast) var(--ease-out),
+        border-color var(--dur-fast) var(--ease-out),
+        transform var(--dur-fast) var(--ease-out);
+}
+
+.btn:active:not(:disabled) {
+    transform: scale(var(--press-scale));
+}
+
+.btn--primary {
+    background: var(--c-accent);
+    color: var(--c-on-accent);
+}
+
+.btn--primary:hover:not(:disabled) {
+    background: var(--c-accent-hover);
+}
+
+.btn--primary:active:not(:disabled) {
+    background: var(--c-accent-active);
+}
+
+.btn--secondary {
+    border-color: var(--c-border-strong);
+    color: var(--c-text);
+}
+
+.btn--secondary:hover:not(:disabled) {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
+}
+
+.btn--danger {
+    background: var(--c-danger);
+    color: var(--c-on-danger);
+}
+
+.btn--danger:hover:not(:disabled) {
+    background: var(--c-danger-hover);
+}
+
+.btn--danger:active:not(:disabled) {
+    background: var(--c-danger-active);
+}
+
+.btn--ghost {
+    color: var(--c-text-muted);
+}
+
+.btn--ghost:hover:not(:disabled) {
+    background: var(--c-raised);
+    color: var(--c-text);
+}
+
+.btn--sm {
+    min-height: var(--control-h-sm);
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+}
+
+/* --------------------------------------------------------------- surfaces */
+
+/*
+ * The one structural idea in this system: state lives on a panel's leading edge, never in its
+ * fill. A tinted card is unreadable at arm's length and turns a grid of 64 gears into confetti;
+ * a 3px rail reads across a room and stacks cleanly. Set --rail to any status colour.
+ */
+.panel {
+    position: relative;
+    padding: var(--space-4);
+    border: var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-1);
+}
+
+.panel--rail {
+    padding-left: calc(var(--space-4) + var(--rail-width));
+}
+
+.panel--rail::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--rail-width);
+    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+    background: var(--rail, var(--c-border-strong));
+}
+
+/* ---------------------------------------------------------------- status */
+
+/*
+ * Status is never colour alone: a badge carries its own word, and .dot is only ever an adjunct
+ * to one. Set --status + --status-bg from the semantic tokens.
+ */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--status-bg, var(--c-offline-bg));
+    color: var(--status, var(--c-offline));
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--tracking-wide);
+    line-height: var(--leading-tight);
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.dot {
+    flex: none;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: var(--radius-pill);
+    background: currentColor;
+}
+
+.is-ok {
+    --status: var(--c-ok);
+    --status-bg: var(--c-ok-bg);
+    --rail: var(--c-ok);
+}
+
+.is-warn {
+    --status: var(--c-warn);
+    --status-bg: var(--c-warn-bg);
+    --rail: var(--c-warn);
+}
+
+.is-error {
+    --status: var(--c-danger);
+    --status-bg: var(--c-danger-bg);
+    --rail: var(--c-danger);
+}
+
+.is-offline {
+    --status: var(--c-offline);
+    --status-bg: var(--c-offline-bg);
+    --rail: var(--c-offline);
+}
+
+.is-busy {
+    --status: var(--c-busy);
+    --status-bg: var(--c-busy-bg);
+    --rail: var(--c-busy);
+}
+
+/* -------------------------------------------------------------- utilities */
+
+.muted {
+    color: var(--c-text-muted);
+}
+
+/* Addresses, hex frames, versions, IPs: fixed-width so a column of them scans vertically. */
+.mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--leading-data);
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- app shell */
+
+.appbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: var(--border);
+    background: var(--c-surface);
+}
+
+/* Abstracted from the Calaos logotype, whose letterforms are split horizontally into a pale
+   upper half and a saturated lower half. Hard stop, not a gradient wash. */
+.mark {
+    flex: none;
+    width: 0.5rem;
+    height: 1.75rem;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        180deg,
+        var(--c-brand-light) 0 50%,
+        var(--c-brand) 50% 100%
+    );
+}
+
+.appbar h1 {
+    flex: 1 1 auto;
+    margin: 0;
+    font-size: var(--text-lg);
+}
+
+.page {
+    max-width: var(--page-max);
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-4) var(--space-12);
+}
+
+/* Label left, value right and monospaced — meter-readout alignment, so values scan as a column. */
+.data-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--space-2) var(--space-6);
+    margin: 0;
+}
+
+.data-list dt {
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+}
+
+.data-list dd {
+    margin: 0;
+    justify-self: end;
+    text-align: right;
+    overflow-wrap: anywhere;
+}
