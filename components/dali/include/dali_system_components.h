@@ -43,9 +43,26 @@ extern "C" {
 #define DALI_RESULT_NO_REPLY (-1)
 
 /**
+ * @brief Sentinel returned when something answered but could not be decoded.
+ *
+ * Two or more devices replying at once produce overlapping waveforms. IEC 62386-102 requires the
+ * binary search to read any response -- including a collided one -- as "yes"; folding that into
+ * DALI_RESULT_NO_REPLY makes a multi-device COMPARE look like an empty bus, and commissioning then
+ * finds nothing at all.
+ */
+#define DALI_RESULT_COLLISION (-2)
+
+/**
  * @brief Test whether a query result contains a valid backward-frame byte.
  */
 #define DALI_RESULT_IS_VALID(r) ((r) >= 0)
+
+/**
+ * @brief Test whether anything at all answered, decodable or not.
+ *
+ * This, not DALI_RESULT_IS_VALID, is the test a COMPARE round needs.
+ */
+#define DALI_RESULT_IS_ACTIVITY(r) ((r) >= 0 || (r) == DALI_RESULT_COLLISION)
 
 /* =========================================================================
  * Types

@@ -78,6 +78,16 @@ the same name takes precedence, so keeping both would put two copies in the buil
 No `-Wno-*` flag and no `CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS` was needed: upstream 1.1.0 already
 compiles clean under IDF 6 warnings-as-errors, so patches 1–13 are all about listen mode.
 
+14. **`DALI_RESULT_COLLISION` and `DALI_RESULT_IS_ACTIVITY`** (`dali_system_components.h`,
+    `dali_master_do_raw_transaction`). Upstream reports anything that is not a cleanly decoded
+    8-bit backward frame as `DALI_RESULT_NO_REPLY`, so colliding replies are indistinguishable
+    from an empty bus. IEC 62386-102 requires the opposite for the commissioning binary search:
+    any response, corrupted included, means yes. Without this, `COMPARE` at the top of the range
+    returns "nothing there" the moment two or more gears are unaddressed, and commissioning
+    reports success having assigned zero addresses. The transaction now tracks whether an RX event
+    arrived that failed to decode and returns the new sentinel; `DALI_RESULT_IS_VALID` is
+    unchanged, so callers that want a usable byte still reject it.
+
 ## Re-syncing with upstream
 
 ```bash

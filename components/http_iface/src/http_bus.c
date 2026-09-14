@@ -14,6 +14,14 @@
 /** SPEC 9: the synchronous endpoints answer in-band or give up. */
 #define SYNC_TIMEOUT_MS 2000
 
+/*
+ * configure is synchronous but is not one transaction: every parameter costs a DTR load, a
+ * send-twice STORE and a read-back, so writing all sixteen scenes is seconds of bus time. Timing
+ * out at 2 s would report failure for a write that is in fact succeeding, and invite the user to
+ * repeat it. The cost is that the single httpd worker is held for the duration.
+ */
+#define CONFIGURE_TIMEOUT_MS 15000
+
 /* --- helpers --------------------------------------------------------------------------------- */
 
 /**
@@ -62,14 +70,14 @@ static int uri_number_after(const char *uri, const char *prefix)
 }
 
 /** Run a command through the bus and answer with its result. Takes no ownership of @p cmd. */
-static esp_err_t run_sync(httpd_req_t *req, gw_cmd_t *cmd)
+static esp_err_t run_sync_for(httpd_req_t *req, gw_cmd_t *cmd, uint32_t timeout_ms)
 {
     cmd->origin = GW_ORIGIN_HTTP;
 
     gw_result_t res;
     memset(&res, 0, sizeof(res));
 
-    esp_err_t err = dali_bus_submit_sync(cmd, &res, SYNC_TIMEOUT_MS);
+    esp_err_t err = dali_bus_submit_sync(cmd, &res, timeout_ms);
     if (err == ESP_ERR_NO_MEM) {
         return http_send_error(req, GW_ERR_BUS_BUSY, "command queue full");
     }
@@ -81,11 +89,22 @@ static esp_err_t run_sync(httpd_req_t *req, gw_cmd_t *cmd)
     }
 
     cJSON *obj = gw_api_result_to_json(&res);
+    bool ok = res.ok;
     gw_api_result_free(&res);
-    if (!res.ok) {
+    if (!ok) {
         httpd_resp_set_status(req, "409 Conflict");
     }
     return http_send_json(req, obj);
+}
+
+static esp_err_t run_sync(httpd_req_t *req, gw_cmd_t *cmd)
+{
+    return run_sync_for(req, cmd, SYNC_TIMEOUT_MS);
+}
+
+static esp_err_t run_configure(httpd_req_t *req, gw_cmd_t *cmd)
+{
+    return run_sync_for(req, cmd, CONFIGURE_TIMEOUT_MS);
 }
 
 /** Start a long operation: 202 with {started:true}, progress arrives on SSE (SPEC 9). */
@@ -306,7 +325,7 @@ esp_err_t http_route_gear_post(httpd_req_t *req)
     }
     if (strcmp(action, "configure") == 0) {
         /* configure is a state machine but parks its caller, so it still answers in band. */
-        return route_gear_action(req, "configure", run_sync);
+        return route_gear_action(req, "configure", run_configure);
     }
     if (strcmp(action, "identify") == 0) {
         return route_gear_action(req, "identify", run_async);

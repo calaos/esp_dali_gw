@@ -257,8 +257,9 @@ static void op_raw(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
 
 /**
  * The bus has no "is it powered" register: the only evidence is whether anything answers. A
- * broadcast QUERY CONTROL GEAR draws a reply (or a collision, which the driver reports as a
- * mangled byte) from any gear present on a powered bus.
+ * broadcast QUERY CONTROL GEAR draws a reply from any gear on a powered bus -- and several gears
+ * answering at once collide, which the driver reports as DALI_RESULT_COLLISION rather than folding
+ * into silence.
  */
 static void op_bus_check(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
 {
@@ -275,7 +276,8 @@ static void op_bus_check(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
         return;
     }
 
-    bool answered = DALI_RESULT_IS_VALID(reply);
+    /* A broadcast query on a healthy multi-gear bus collides by design; that is still an answer. */
+    bool answered = DALI_RESULT_IS_ACTIVITY(reply);
     if (ctx->powered != answered) {
         ctx->powered = answered;
         bus_notify_state(ctx);

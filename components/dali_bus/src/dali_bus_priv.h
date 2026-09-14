@@ -16,6 +16,9 @@
 /** Where the Part 102 binary search currently is (ADR 0004). */
 typedef enum {
     COMM_QUIESCENT = 0,
+    COMM_QUIESCENT_SETTLE,
+    COMM_103_TERMINATE,
+    COMM_103_SETTLE,
     COMM_TERMINATE_START,
     COMM_INITIALISE,
     COMM_RANDOMISE,
@@ -60,7 +63,10 @@ typedef struct {
     uint8_t next_addr;  /**< short address to hand out next */
     uint8_t max_devices;
     int64_t settle_until_us;
-    bool round_open; /**< a device was selected and is mid-assignment */
+    bool round_open;     /**< a device was selected and is mid-assignment */
+    uint16_t rounds;     /**< search rounds started, to bound a non-withdrawing device */
+    uint16_t last_found; /**< ctx->op.found at the start of the current round */
+    uint8_t stuck;       /**< consecutive rounds that assigned nothing */
 } comm_ctx_t;
 
 typedef struct {

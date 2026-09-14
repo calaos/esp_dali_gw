@@ -732,6 +732,8 @@ esp_err_t dali_master_do_raw_transaction(dali_master_handle_t handle, const uint
     rmt_rx_done_event_data_t rx_data;
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(DALI_BF_TIMEOUT_MS);
     bool bf_found = false;
+    /* Something was on the wire but would not decode -- the signature of colliding replies. */
+    bool garbled = false;
 
     while (!bf_found) {
         TickType_t now = xTaskGetTickCount();
@@ -754,6 +756,9 @@ esp_err_t dali_master_do_raw_transaction(dali_master_handle_t handle, const uint
             ESP_LOGD(TAG, "BF received: 0x%02X", (unsigned)frame);
             bf_found = true;
         } else {
+            if (dec != DALI_DECODE_OK) {
+                garbled = true;
+            }
             /* Could be the FF echo or a garbled frame — re-arm and keep waiting. */
             ESP_LOGD(TAG, "RX event discarded (status %d, bits %d, symbols %u) — waiting for BF",
                      (int)dec, bit_count, (unsigned)rx_data.num_symbols);
@@ -767,8 +772,9 @@ esp_err_t dali_master_do_raw_transaction(dali_master_handle_t handle, const uint
     }
 
     if (!bf_found) {
-        *result = DALI_RESULT_NO_REPLY;
-        ESP_LOGD(TAG, "BF timeout — no reply");
+        *result = garbled ? DALI_RESULT_COLLISION : DALI_RESULT_NO_REPLY;
+        ESP_LOGD(TAG, "%s",
+                 garbled ? "BF garbled - treating as activity" : "BF timeout - no reply");
     }
 
 done:

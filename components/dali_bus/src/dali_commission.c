@@ -10,6 +10,7 @@
  * its short address, WITHDRAW it from the search, and repeat until COMPARE finds nothing.
  */
 #include <string.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -24,8 +25,17 @@ static const char *TAG = "bus";
 /** IEC 62386-102: RANDOMISE needs at least 100 ms before the first COMPARE is meaningful. */
 #define RANDOMISE_SETTLE_MS 120
 
+/** Time for input devices to act on the Part 103 TERMINATE before the 102 search. */
+#define QUIESCENT_SETTLE_MS 50
+
+/** Rounds without an assignment before we conclude a device will never withdraw. */
+#define COMM_MAX_STUCK_ROUNDS 3
+
 /** Bounded so a cancel is still served promptly while the settle time runs out. */
 #define SETTLE_SLICE_MS 10
+
+/** pdMS_TO_TICKS truncates at a 100 Hz tick; a sub-tick delay is a spin, not a wait. */
+#define TICKS_AT_LEAST_ONE(ms) (pdMS_TO_TICKS(ms) > 0 ? pdMS_TO_TICKS(ms) : (TickType_t)1)
 
 /** Part 102 INITIALISE data byte. The driver's enum names the modes; these are the wire values. */
 #define INIT_ALL 0x00
@@ -57,6 +67,18 @@ void bus_commission_begin(bus_ctx_t *ctx, const gw_cmd_t *cmd, gw_result_t *res)
     c->mode = cmd->args.commission.mode;
     c->next_addr = cmd->args.commission.start_addr;
     c->max_devices = (uint8_t)(GW_MAX_GEARS - cmd->args.commission.start_addr);
+
+    if (cmd->args.commission.mode == GW_COMMISSION_ALL) {
+        /* Every short address is about to be reassigned, so the registry describes a bus that no
+         * longer exists. Names are configuration and survive; cached bus state does not. */
+        for (uint8_t a = 0; a < GW_MAX_GEARS; a++) {
+            char kept[GW_NAME_LEN];
+            strlcpy(kept, ctx->gears[a].name, sizeof(kept));
+            memset(&ctx->gears[a], 0, sizeof(gw_gear_t));
+            ctx->gears[a].addr = a;
+            strlcpy(ctx->gears[a].name, kept, sizeof(ctx->gears[a].name));
+        }
+    }
 
     ctx->op.total = c->max_devices;
 
@@ -128,9 +150,24 @@ static bool write_next_search_byte(bus_ctx_t *ctx)
  * A cancel must not just stop the loop: leaving the bus in the initialised state makes every gear
  * ignore ordinary commands for 15 minutes. TERMINATE is sent before giving up.
  */
+/**
+ * Input devices were silenced before the search; leaving them that way outlasts us. The standard's
+ * own timeout is 15 minutes, so a gateway that forgets this leaves every wall switch in the
+ * installation dead for a quarter of an hour after each commissioning run.
+ */
+static void leave_quiescent(bus_ctx_t *ctx)
+{
+    if (ctx->master != NULL) {
+        dali_103_do_device_command(ctx->master, DALI_ADDR_BROADCAST, 0,
+                                   DALI_103_STOP_QUIESCENT_MODE, true, BUS_TX_TIMEOUT_MS, NULL);
+        gw_event_post(GW_EVENT_BUS_ACTIVITY, NULL, 0);
+    }
+}
+
 static void cancel_now(bus_ctx_t *ctx, bool *done, gw_result_t *res)
 {
     bus_special(ctx, DALI_SPECIAL_TERMINATE, 0, false, NULL);
+    leave_quiescent(ctx);
     ESP_LOGW(TAG, "commissioning cancelled after %u assignment(s)", ctx->op.found);
     finish(ctx, done, res, GW_ERR_CANCELLED, "cancelled");
 }
@@ -155,6 +192,35 @@ void bus_commission_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
                                            NULL);
                 gw_event_post(GW_EVENT_BUS_ACTIVITY, NULL, 0);
             }
+            c->settle_until_us = esp_timer_get_time() + QUIESCENT_SETTLE_MS * 1000;
+            c->state = COMM_QUIESCENT_SETTLE;
+            break;
+
+        case COMM_QUIESCENT_SETTLE:
+            if (esp_timer_get_time() < c->settle_until_us) {
+                vTaskDelay(TICKS_AT_LEAST_ONE(SETTLE_SLICE_MS));
+                break;
+            }
+            c->state = COMM_103_TERMINATE;
+            break;
+
+        case COMM_103_TERMINATE:
+            /* Quiescent mode silences event frames, but an input device already in Part 103
+             * commissioning still answers COMPARE and appears as a phantom gear. */
+            if (ctx->master != NULL) {
+                dali_103_send_special(ctx->master, DALI_103_SPECIAL_TERMINATE, 0x00U, false,
+                                      BUS_TX_TIMEOUT_MS, NULL);
+                gw_event_post(GW_EVENT_BUS_ACTIVITY, NULL, 0);
+            }
+            c->settle_until_us = esp_timer_get_time() + QUIESCENT_SETTLE_MS * 1000;
+            c->state = COMM_103_SETTLE;
+            break;
+
+        case COMM_103_SETTLE:
+            if (esp_timer_get_time() < c->settle_until_us) {
+                vTaskDelay(TICKS_AT_LEAST_ONE(SETTLE_SLICE_MS));
+                break;
+            }
             c->state = COMM_TERMINATE_START;
             break;
 
@@ -178,13 +244,34 @@ void bus_commission_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
         case COMM_SETTLE:
             /* Sliced rather than one long delay so the queue is checked while we wait. */
             if (esp_timer_get_time() < c->settle_until_us) {
-                vTaskDelay(pdMS_TO_TICKS(SETTLE_SLICE_MS));
+                vTaskDelay(TICKS_AT_LEAST_ONE(SETTLE_SLICE_MS));
                 break;
             }
             c->state = COMM_ROUND_START;
             break;
 
         case COMM_ROUND_START:
+            /*
+             * Every round must either assign an address or remove a device from the pool. A device
+             * that answers COMPARE and then ignores WITHDRAW -- a Part 103 input device caught in
+             * the Part 102 search is the documented case -- would otherwise be isolated for ever,
+             * spinning the bus task at full speed with no way out but a user cancel.
+             */
+            if (c->rounds > 0 && ctx->op.found == c->last_found) {
+                c->stuck++;
+                if (c->stuck >= COMM_MAX_STUCK_ROUNDS) {
+                    bus_special(ctx, DALI_SPECIAL_TERMINATE, 0, false, NULL);
+                    leave_quiescent(ctx);
+                    finish(ctx, done, res, GW_ERR_INTERNAL,
+                           "a device answers the search but will not take an address");
+                    return;
+                }
+            } else {
+                c->stuck = 0;
+            }
+            c->rounds++;
+            c->last_found = ctx->op.found;
+
             c->low = 0;
             c->high = SEARCH_MAX;
             c->search = SEARCH_MAX;
@@ -201,7 +288,8 @@ void bus_commission_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
 
         case COMM_COMPARE: {
             bus_special(ctx, DALI_SPECIAL_COMPARE, 0, false, &reply);
-            bool any = DALI_RESULT_IS_VALID(reply);
+            /* A collision is a yes: several devices answered at once. */
+            bool any = DALI_RESULT_IS_ACTIVITY(reply);
 
             if (!c->round_open) {
                 /* First probe of a round, at the top of the range: nothing answering means the
@@ -233,8 +321,18 @@ void bus_commission_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
         }
 
         case COMM_PROGRAM:
+            /*
+             * Skip addresses that are already taken. "unaddressed" on an existing installation is
+             * the normal way to add one lamp, and start_addr defaults to 0 -- without this the new
+             * gear lands on top of the gear already at 0, which op_set_short_address refuses to
+             * create and which cannot be untangled from the UI.
+             */
+            while (c->next_addr < GW_MAX_GEARS && ctx->gears[c->next_addr].present) {
+                c->next_addr++;
+            }
             if (c->next_addr >= GW_MAX_GEARS) {
                 bus_special(ctx, DALI_SPECIAL_TERMINATE, 0, false, NULL);
+                leave_quiescent(ctx);
                 finish(ctx, done, res, GW_ERR_ADDRESS_IN_USE, "ran out of short addresses");
                 return;
             }
@@ -249,7 +347,7 @@ void bus_commission_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
                         false, &reply);
             if (DALI_RESULT_IS_VALID(reply) && (uint8_t)reply == 0xFF) {
                 ctx->gears[c->next_addr].present = true;
-                ctx->gears[c->next_addr].last_seen = 0;
+                ctx->gears[c->next_addr].last_seen = time(NULL);
                 bus_notify_gear(c->next_addr);
                 ctx->op.found++;
                 ctx->op.cursor = ctx->op.found;
@@ -272,6 +370,7 @@ void bus_commission_step(bus_ctx_t *ctx, bool *done, gw_result_t *res)
         case COMM_TERMINATE_END:
         default:
             bus_special(ctx, DALI_SPECIAL_TERMINATE, 0, false, NULL);
+            leave_quiescent(ctx);
             ESP_LOGW(TAG, "commissioning done, %u gear(s) addressed", ctx->op.found);
             finish(ctx, done, res, GW_OK, NULL);
             return;

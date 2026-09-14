@@ -118,6 +118,13 @@ static dali_addr_type_t map_addr_type(gw_target_type_t type)
 #define IDLE_SLICE_MS 2
 
 /*
+ * pdMS_TO_TICKS() truncates, and the default tick is 100 Hz: every delay under 10 ms rounds to
+ * zero, which turns vTaskDelay into a bare yield and any "wait a little" loop into a busy spin at
+ * priority 10. Always round a non-zero millisecond count up to at least one tick.
+ */
+#define TICKS_AT_LEAST_ONE(ms) (pdMS_TO_TICKS(ms) > 0 ? pdMS_TO_TICKS(ms) : (TickType_t)1)
+
+/*
  * DALI has no collision detection, so the only courtesy available is to wait for quiet. The wait is
  * bounded and then the frame goes out regardless: refusing would turn a miscalibrated idle
  * threshold into a device that cannot drive its own bus, and DALI_LISTEN_IDLE_US has never been
@@ -139,7 +146,7 @@ static void wait_for_idle(bus_ctx_t *ctx)
         if (dali_master_bus_idle(ctx->master)) {
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(IDLE_SLICE_MS));
+        vTaskDelay(TICKS_AT_LEAST_ONE(IDLE_SLICE_MS));
     }
     ESP_LOGD(TAG, "bus still busy after %d ms, transmitting anyway", IDLE_WAIT_MS);
 }
@@ -161,8 +168,13 @@ gw_err_t bus_transact(bus_ctx_t *ctx, gw_target_t target, bool is_cmd, uint8_t o
         .tx_timeout_ms = BUS_TX_TIMEOUT_MS,
     };
 
+    /*
+     * Passing NULL through tells the driver to skip the backward-frame window entirely (it returns
+     * right after TX). Handing it a scratch pointer instead would make every command frame -- DAPC,
+     * STORE, TERMINATE -- wait 25 ms for a reply that cannot come.
+     */
     int got = DALI_RESULT_NO_REPLY;
-    esp_err_t err = dali_master_do_transaction(ctx->master, &cfg, &got);
+    esp_err_t err = dali_master_do_transaction(ctx->master, &cfg, reply != NULL ? &got : NULL);
     gw_event_post(GW_EVENT_BUS_ACTIVITY, NULL, 0);
 
     if (err != ESP_OK) {
@@ -190,7 +202,7 @@ gw_err_t bus_special(bus_ctx_t *ctx, uint8_t special, uint8_t data, bool send_tw
         .tx_timeout_ms = BUS_TX_TIMEOUT_MS,
     };
     int got = DALI_RESULT_NO_REPLY;
-    esp_err_t err = dali_master_do_transaction(ctx->master, &cfg, &got);
+    esp_err_t err = dali_master_do_transaction(ctx->master, &cfg, reply != NULL ? &got : NULL);
     gw_event_post(GW_EVENT_BUS_ACTIVITY, NULL, 0);
     if (err != ESP_OK) {
         return gw_api_err_from_esp(err);
@@ -353,6 +365,10 @@ static void bus_task(void *arg)
 
     for (;;) {
         if (s_ctx.op.kind != GW_CMD_NONE) {
+            /* A full queue means dali_bus_cancel() could not enqueue; the flag is the fallback. */
+            if (atomic_load(&s_cancel_requested)) {
+                s_ctx.op.cancel = true;
+            }
             serve_between_steps();
 
             bool done = false;
@@ -364,8 +380,15 @@ static void bus_task(void *arg)
             registry_unlock();
 
             if (done) {
+                bool rescan = s_ctx.op.kind == GW_CMD_COMMISSION && !s_ctx.op.cancel;
                 finish_long(&res);
                 s_ctx.op.kind = GW_CMD_NONE;
+                if (rescan) {
+                    /* SPEC 7.4: commissioning is followed by a scan. Without it the registry
+                     * still describes the addresses the gears had before. */
+                    gw_cmd_t scan = {.kind = GW_CMD_SCAN, .origin = GW_ORIGIN_INTERNAL};
+                    dali_bus_submit(&scan);
+                }
                 atomic_store(&s_cancel_requested, false);
                 bus_notify_state(&s_ctx);
             }
@@ -379,7 +402,7 @@ static void bus_task(void *arg)
         TickType_t wait = portMAX_DELAY;
         if (s_next_poll_us != 0) {
             int64_t remaining_ms = (s_next_poll_us - esp_timer_get_time()) / 1000;
-            wait = remaining_ms > 0 ? pdMS_TO_TICKS(remaining_ms) : 0;
+            wait = remaining_ms > 0 ? TICKS_AT_LEAST_ONE(remaining_ms) : 0;
         }
 
         bus_msg_t msg;
@@ -400,10 +423,17 @@ static void bus_task(void *arg)
          * unpowered: 64 timeouts every interval would fill the log and buy nothing. */
         if (s_next_poll_us != 0 && esp_timer_get_time() >= s_next_poll_us) {
             s_next_poll_us = esp_timer_get_time() + (int64_t)s_cfg.poll_interval_s * 1000000;
+
             if (s_ctx.powered) {
                 bus_msg_t poll = {.cmd = {.kind = GW_CMD_POLL_ALL, .origin = GW_ORIGIN_INTERNAL},
                                   .reply = NULL};
                 start_long(&poll);
+            } else {
+                /* Nothing else re-probes: a bus whose PSU is switched on after boot would stay
+                 * "unpowered" for ever, and polling with it. One cheap frame per interval. */
+                bus_msg_t check = {.cmd = {.kind = GW_CMD_BUS_CHECK, .origin = GW_ORIGIN_INTERNAL},
+                                   .reply = NULL};
+                run_command(&check);
             }
         }
     }
