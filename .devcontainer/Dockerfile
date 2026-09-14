@@ -77,7 +77,9 @@ RUN if [ "${INSTALL_CLAUDE_CODE}" = "1" ]; then npm install -g @anthropic-ai/cla
 USER ${USERNAME}
 WORKDIR /workspaces/esp_dali_gw
 
-ENV IDF_TARGET=esp32c6 \
-    ESPPORT=/dev/ttyACM0 \
+# IDF_TARGET is deliberately NOT set: it silently overrides `idf.py set-target`, so building for
+# another chip appears to work and produces the old target. The target comes from sdkconfig, which
+# set-target writes.
+ENV ESPPORT=/dev/ttyACM0 \
     CCACHE_DIR=/home/${USERNAME}/.cache/ccache \
     IDF_CCACHE_ENABLE=1

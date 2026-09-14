@@ -25,7 +25,6 @@
   ],
 
   "containerEnv": {
-    "IDF_TARGET": "esp32c6",
     "ESPPORT": "/dev/ttyACM0",
     "ESPBAUD": "921600"
   },
