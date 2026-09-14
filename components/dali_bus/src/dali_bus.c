@@ -113,12 +113,45 @@ static dali_addr_type_t map_addr_type(gw_target_type_t type)
     }
 }
 
+/** Longest we defer to a foreign master before transmitting anyway. */
+#define IDLE_WAIT_MS 20
+#define IDLE_SLICE_MS 2
+
+/*
+ * DALI has no collision detection, so the only courtesy available is to wait for quiet. The wait is
+ * bounded and then the frame goes out regardless: refusing would turn a miscalibrated idle
+ * threshold into a device that cannot drive its own bus, and DALI_LISTEN_IDLE_US has never been
+ * measured against a real receiver. A check that can only improve things, never brick them.
+ */
+static void wait_for_idle(bus_ctx_t *ctx)
+{
+    /*
+     * Only while listening. Without it the driver sees nothing but its own transmissions, so the
+     * check adds no information -- and if the idle threshold turns out to be miscalibrated on real
+     * hardware, gating it here keeps the cost inside the diagnostic mode instead of adding up to
+     * IDLE_WAIT_MS to every frame of an ordinary scan.
+     */
+    if (!atomic_load(&s_listen_wanted)) {
+        return;
+    }
+
+    for (int waited = 0; waited < IDLE_WAIT_MS; waited += IDLE_SLICE_MS) {
+        if (dali_master_bus_idle(ctx->master)) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(IDLE_SLICE_MS));
+    }
+    ESP_LOGD(TAG, "bus still busy after %d ms, transmitting anyway", IDLE_WAIT_MS);
+}
+
 gw_err_t bus_transact(bus_ctx_t *ctx, gw_target_t target, bool is_cmd, uint8_t opcode,
                       bool send_twice, int *reply)
 {
     if (ctx->master == NULL) {
         return GW_ERR_INTERNAL;
     }
+    wait_for_idle(ctx);
+
     const dali_master_transaction_config_t cfg = {
         .addr_type = map_addr_type(target.type),
         .addr = target.addr,
@@ -146,6 +179,8 @@ gw_err_t bus_special(bus_ctx_t *ctx, uint8_t special, uint8_t data, bool send_tw
     if (ctx->master == NULL) {
         return GW_ERR_INTERNAL;
     }
+    wait_for_idle(ctx);
+
     const dali_master_transaction_config_t cfg = {
         .addr_type = DALI_ADDR_SPECIAL,
         .addr = special,

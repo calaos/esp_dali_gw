@@ -120,4 +120,12 @@ Wire the PSU first — the transceiver has none. See `docs/HARDWARE.md`.
 - [ ] A transaction is not measurably slower with listening on than with it off — compare a
       64-address scan both ways.
 - [ ] A DALI-2 push-button press produces an event.
-- [ ] The monitor in the raw console shows every frame on the bus.
+- [ ] The monitor in the raw console shows frames from another master or a DALI-2 input device.
+- [ ] `DALI_LISTEN_IDLE_US` (1400 us) against real receiver pulse stretching: it must stay above a
+      2 Te run and below the 7 Te backward-frame delay. If it is wrong, the bus-idle wait before
+      each frame fires constantly — which is why that wait is gated on listening being on, and why
+      a scan with the monitor running should be timed against one without it.
+- [ ] Backward frames decode correctly on a real bus. Every query now goes through the new decoder,
+      so this is the highest-risk item in M5 despite being the least visible.
+- [ ] Whether the RMT records leading idle before the first edge. The decoder handles both, but
+      only hardware settles which happens.
