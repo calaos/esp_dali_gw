@@ -92,9 +92,9 @@ override.
 
 ## Screens (M1)
 
-Three views behind a hash router: the setup wizard, Settings and About. Dashboard, gear detail and
-bus tools (SPEC §10 views 2-4) land in M2/M3; the nav is built from the `NAV` array in
-`src/router.ts`, so adding them is one entry each.
+Three views behind a hash router: the setup wizard, Settings and About. The nav is built from the
+`NAV` array in `src/router.ts`; M3 added Dashboard, gear detail and bus tools as three more
+entries and one parameterised route.
 
 **One alignment rule across read and write.** `.data-list` already set it — label left in muted
 small type, value right — and `.field` reuses the same two-column grid for form rows. A Settings
@@ -143,9 +143,120 @@ indeterminate variant sweeps only while there is genuinely nothing to divide (a 
 image being verified). Nothing else in the UI moves on its own: no entrance animations, no hover
 transitions on cards.
 
+## Screens (M3) — the bus
+
+Dashboard, gear detail and bus tools (SPEC §10 views 2-4). No new colour, type, spacing or motion
+token; one new structural device, reused four times; everything else composes what M1 already had.
+
+**The bus speaks its own notation, so the UI does too.** `A3` is a short address, `G0` a group,
+`S7` a scene, `0x8A` a status byte. This is what is printed on every DALI commissioning tool and in
+Part 102 itself, and it is shorter, unambiguous and already familiar to the person on the ladder.
+It is the one place the interface uses jargon, and it earns it. Everything else is plain: "Make it
+blink", "Level after power-on", "Nothing answered here on the last scan".
+
+**A healthy fitting has no status colour and no badge.** The M1 rule says status lives on the
+leading edge, never in the fill; M3 adds the corollary that most of the time it says nothing at all.
+`.gear` leaves `--rail` at its neutral default and renders no badge unless `gearTrouble()` returns
+something, so a bus of 64 working fittings is a calm grid and the one with a failed lamp is the
+only coloured thing on the screen. A green "OK" badge on every card is the same confetti as a
+tinted card, one step removed.
+
+**Absent is three signals, none of them colour.** A `present: false` address keeps its name and its
+last values (SPEC §7.4), so it cannot simply be hidden. `.gear--absent` drops the card's fill to
+`--c-bg` — it sinks into the page instead of floating on the surface, literally less present than
+its neighbours — breaks the edge rail into a dashed one, and disables every control. The badge says
+`Absent` and a line under the card says the values are the last ones the gateway saw.
+
+**The segmented control is the nav marker, reused.** `.seg__btn.is-current` carries the same 3 px
+bottom edge as `.nav__link.is-current`. It is the only new structural device in M3 and it does four
+jobs: a fitting's On/Off, the dashboard's All gear / By group, scan depth, and commissioning mode.
+Nothing else was invented to mean "one of these".
+
+**The level readout is the one loud thing on a card, and it is not monospaced.** `.level__value` is
+`--text-lg` with `tabular-nums` in the sans face. The mono face is structural everywhere else, but
+this is the one readout that mixes digits with a word, and `Off` set in Ubuntu Mono reads as `0ff`
+at arm's length. Tabular figures keep the column steady without it.
+
+**Groups are a mode, not a second copy.** Membership lives in each fitting's `config.groups`, which
+only the full entry carries, so switching to By group reads the present addresses once, four at a
+time, and says so while it does. A fitting in two groups renders in both sections; both cards are
+views of one store entry and move together.
+
+**Scenes are a tri-state, and the UI never collapses it.** An unprogrammed scene is `null` (0xFF),
+which is not level 0: the fitting ignores the scene call rather than switching off. A programmed
+row is a number input plus Clear; an unprogrammed row says so in words and offers "Set a level".
+Rows that differ from the fitting carry the edge marker as an inset shadow, the same one the
+selected network row uses.
+
+**Writes to a fitting are staged, counted and named.** `.writebar` is the settings save bar scoped
+to one panel: it appears only when something differs, counts the changes, and says "Write to
+fitting" because that is what the button does — one DTR store per parameter, read back and
+verified.
+
+**Re-addressing asks for the address, not for "yes".** `TypeToConfirm` takes the target address as
+the word, so the confirming gesture is the same value the user is about to commit. A target that
+another present fitting already answers on is blocked before the request, with that fitting named,
+rather than left to come back as `address_in_use`. Commissioning `all` is gated the same way, on
+the word `READDRESS`, and the question names what breaks: wall switches, controllers and Home
+Assistant entities that address fittings by number.
+
+**The raw console pairs a frame with its answer.** One `<li>` per exchange, `TX` above and `RX`,
+`ERR` or `··` below, newest exchange first. Interleaving them as independent lines put every reply
+above the frame that caused it. `TX`/`RX` rather than an arrow glyph: it is what the protocol calls
+them, and it survives at `--text-xs`.
+
+**The M5 monitor has a place, not a placeholder.** The live bus monitor panel renders in the
+offline state with a badge saying `M5` and one sentence about what it will be. The stream parser
+already accepts and drops `event: rx`, so turning it on is a component and not a protocol change.
+
+### The slider write path
+
+`src/level.ts`. Optimistic locally, and on the wire a queue of exactly one:
+
+1. every `input` event moves the slider and touches nothing else;
+2. the value replaces whatever was waiting — only the newest is ever sent (coalescing);
+3. it leaves after 150 ms of quiet, or 150 ms after the first unsent value, whichever comes first,
+   or immediately on `change` when the user lets go;
+4. no two requests start less than 150 ms apart, and none starts while one is in flight.
+
+Rule 3 is a debounce with a ceiling rather than a plain trailing debounce: a finger that keeps
+moving never leaves 150 ms of quiet, and a dimmer that shows nothing until you let go is useless in
+the room you are standing in. Rules 2 and 4 are the safety: a dragged slider contributes at most one
+command to the 32-deep queue at any instant and at most ~7 transactions a second, whatever the
+gesture. Measured against the stub, 100 input events over two seconds produce 13 requests, each
+carrying the newest value; 51 events in one tick produce one.
+
+The pipe owns the slider position while anything is queued, in flight, or within 900 ms of the last
+successful write, so an SSE `gear` event that is still carrying the old level cannot yank the
+control out from under the finger. After that the device's value wins again. A refused write shows
+the closed error code in the card's own words (`Bus busy`, `Bus unpowered`, `No reply`) and hands
+the slider straight back.
+
+### The event stream
+
+`src/events.ts` reads `GET /api/events` with `fetch` and parses SSE by hand instead of using
+`EventSource`. The reason is the three-client cap: `EventSource` reports every failure as one
+opaque `error` event with no status and retries on a schedule of its own, which turns "someone left
+a tab open on the other phone" into a reconnect storm that keeps the user locked out of their own
+gateway. Reading the response by hand gives the status code, so:
+
+- **503** is `refused`: a 20 s wait and a banner that says the gateway keeps three connections, it
+  has three, and closing one of them is the fix. There is a Try now button for when the user has
+  just done that.
+- **anything else** is `retrying`: 1 s → 15 s jittered backoff and a banner that says the numbers
+  on screen are the last ones the gateway sent.
+
+One stream per page, opened once by `App` and never re-opened by a route change — the gateway
+counts listeners, not tabs. A `pagehide` handler aborts it so the slot is freed the moment the page
+goes away. A watchdog treats 45 s of silence (three missed 15 s heartbeats) as a dead stream and
+reconnects, because a Wi-Fi association that drops without a FIN leaves the reader blocked for
+ever.
+
 ## Additions to the vocabulary
 
-No new colour, type, spacing or motion token. New classes only, all composed from existing tokens:
+No new colour, type, spacing or motion token. New classes only, all composed from existing tokens.
+
+### M1
 
 | Class | Role |
 |---|---|
@@ -162,8 +273,32 @@ No new colour, type, spacing or motion token. New classes only, all composed fro
 | `.savebar`, `.savebar__text` | the sticky unsaved-changes bar |
 | `.handoff__url`, `.handoff__steps` | the post-save handoff screen |
 
+### M3
+
+| Class | Role |
+|---|---|
+| `.banner` | the event-stream notice, sticky under the nav |
+| `.seg`, `.seg__btn`, `.seg__btn.is-current` | exclusive choices, marked with the nav's edge |
+| `.level`, `.level__range`, `.level__value` | the dimmer and its readout |
+| `.toolbar` | a panel that is only controls |
+| `.gears` | the responsive card grid, one column at phone width |
+| `.gear`, `.gear__head`, `.gear__name`, `.gear__addr`, `.gear__foot`, `.gear__note`, `.gear__error`, `.gear__data`, `.gear--absent` | the fitting card |
+| `.group`, `.group__summary`, `.group__id`, `.group__name`, `.group__count`, `.group__body`, `.group__controls` | a collapsible group section |
+| `.scenes`, `.scene`, `.scene.is-changed`, `.scene__id`, `.scene__empty`, `.scene__level` | the 16-row scene table |
+| `.groups`, `.groupbox`, `.groupbox.is-on` | the group membership checkboxes |
+| `.writebar` | unwritten fitting parameters |
+| `.table-scroll`, `.table` | the commissioning result table |
+| `.console`, `.console__row`, `.console__line`, `.console__dir`, `.console__dir--tx/--rx/--err/--wait`, `.console__text` | the raw frame history |
+| `.backlink`, `.tools__actions`, `.query__form`, `.query__reply` | small layout helpers |
+
+The dimmer is a bare `<input type="range">` styled only by `accent-color`, which the token layer
+already sets. The browser draws a filled track and a thumb that follow the viewer's colour scheme
+and platform sizing, and the 44 px input box is the drag target whatever size the thumb renders at.
+Re-cutting all four vendor pseudo-elements would buy a slightly different grey and four more ways
+to break.
+
 `.btn--sm` exists in the token layer but is not used on any touch target in M1: every button and
-input in these screens is at least `--control-h` (44 px). Keep it for the dense gear lists in M2.
+input in these screens is at least `--control-h` (44 px).
 
 The two icons (signal bars, padlock) are inline SVG that inherit `currentColor` and carry a
 `.visually-hidden` label. No icon font, no sprite, no third icon.
@@ -214,6 +349,21 @@ Every pair below was computed with the WCAG 2.x relative-luminance formula. Text
 | `--c-border-strong` on `--c-bg` (UI, 3:1) | 3.39 | 4.18 |
 | `--c-focus` ring on `--c-bg` (UI, 3:1) | 4.81 | 8.85 |
 
+M3 added `--c-raised` as a text-bearing surface (the console, the write bar) and `--c-bg` as the
+fill of an absent card, so those pairs are held to the same contract:
+
+| Pair | Light | Dark |
+|---|---|---|
+| `--c-text` on `--c-raised` | 17.28 | 13.71 |
+| `--c-text-muted` on `--c-raised` | 5.82 | 6.84 |
+| `--c-accent` on `--c-raised` (console TX) | 5.13 | 7.21 |
+| `--c-ok` on `--c-raised` (console RX) | 5.06 | 7.01 |
+| `--c-danger` on `--c-raised` (console ERR) | 5.44 | 5.32 |
+| `--c-text-muted` on `--c-surface` (segmented, unselected) | 6.15 | 7.59 |
+| `--c-accent` on `--c-surface` (segmented, selected) | 5.42 | 8.00 |
+| `--c-offline` on `--c-bg` (absent card) | 5.46 | 6.64 |
+| `--c-border-strong` on `--c-raised` (UI, 3:1) | 3.62 | 3.41 |
+
 `--c-border` is intentionally below 3:1 in both themes; see the two-border-tokens decision above.
 `--c-brand` / `--c-brand-light` are logotype colours used only in the decorative `.mark`, which
 1.4.11 exempts.
@@ -222,6 +372,6 @@ Re-run the check after any palette edit — the ratios above are the contract, n
 
 ## Budget
 
-CSS is 3.62 KB gzipped of the 100 KB total budget; the whole built UI is 19.85 KB gzipped
-(HTML 0.49 + CSS 3.62 + JS 15.74), 19 % of the budget. Re-run `tools/check-bundle-size.sh` after
+After M3 the whole built UI is 31.45 KB gzipped (HTML 0.48 + CSS 4.47 + JS 26.50), 31 % of the
+100 KB budget. Still no runtime dependency beyond Preact. Re-run `tools/check-bundle-size.sh` after
 any change.

@@ -20,3 +20,15 @@ tools/docker-run.sh npm --prefix web run build
 
 All npm commands must run inside the toolchain container (`tools/docker-run.sh`), which is the same
 image the devcontainer and CI use.
+
+## Without a device
+
+`web/tools/stub-gateway.py` answers the SPEC §9 routes with plausible data and emits a real SSE
+stream, so every screen can be exercised on a laptop. It also fakes the things that are hard to
+produce on a bench — an unpowered bus, `bus_busy`, a stream that dies mid-scan, a fourth event
+listener being refused — through a `/stub/` control plane; the header of the file lists them.
+
+```bash
+tools/docker-run.sh npm --prefix web run build
+python3 web/tools/stub-gateway.py web/dist 8099   # then open http://localhost:8099/
+```

@@ -463,12 +463,15 @@ export function TypeToConfirm({
     label,
     question,
     confirmLabel,
+    cancelLabel,
     onConfirm,
 }: {
     word: string;
     label: string;
     question: string;
     confirmLabel: string;
+    /** What backing out means here. Defaults to leaving the settings alone. */
+    cancelLabel?: string;
     onConfirm: () => void;
 }) {
     const id = useId();
@@ -526,8 +529,140 @@ export function TypeToConfirm({
                         setTyped('');
                     }}
                 >
-                    Keep the settings
+                    {cancelLabel ?? 'Keep the settings'}
                 </button>
+            </div>
+        </div>
+    );
+}
+
+/* ------------------------------------------------------------- bus controls */
+
+/**
+ * A small set of exclusive choices. The selected one carries the same 3 px edge the nav and the
+ * panels use: "this one" looks identical wherever it appears, and nothing new was invented for it.
+ */
+export function Segmented<T extends string>({
+    label,
+    value,
+    options,
+    disabled,
+    onSelect,
+}: {
+    label: string;
+    value: T;
+    options: { value: T; label: string }[];
+    disabled?: boolean;
+    onSelect: (value: T) => void;
+}) {
+    return (
+        <div class="seg" role="group" aria-label={label}>
+            {options.map((option) => (
+                <button
+                    key={option.value}
+                    type="button"
+                    class={option.value === value ? 'seg__btn is-current' : 'seg__btn'}
+                    aria-pressed={option.value === value}
+                    disabled={disabled ?? false}
+                    onClick={() => {
+                        onSelect(option.value);
+                    }}
+                >
+                    {option.label}
+                </button>
+            ))}
+        </div>
+    );
+}
+
+/**
+ * The 0-100 % control. The readout is the loudest thing on a gear card on purpose: it is what you
+ * read from the top of a ladder. `Off` rather than `0 %` — the bus distinguishes them and so
+ * should the label.
+ */
+export function Slider({
+    label,
+    pct,
+    disabled,
+    onInput,
+    onCommit,
+}: {
+    label: string;
+    pct: number;
+    disabled?: boolean;
+    onInput: (pct: number) => void;
+    onCommit: () => void;
+}) {
+    return (
+        <div class="level">
+            <input
+                type="range"
+                class="level__range"
+                min={0}
+                max={100}
+                step={1}
+                value={pct}
+                aria-label={label}
+                disabled={disabled ?? false}
+                onInput={(event) => {
+                    onInput(Number(event.currentTarget.value));
+                }}
+                onChange={onCommit}
+            />
+            <output class="level__value">{pct === 0 ? 'Off' : `${pct} %`}</output>
+        </div>
+    );
+}
+
+/** A name the device stores. Edits in place; Enter saves, Escape puts the old name back. */
+export function RenameField({
+    label,
+    value,
+    saving,
+    onSave,
+}: {
+    label: string;
+    value: string;
+    saving: boolean;
+    onSave: (name: string) => void;
+}) {
+    const id = useId();
+    const [draft, setDraft] = useState(value);
+    const [seen, setSeen] = useState(value);
+    if (seen !== value) {
+        setSeen(value);
+        setDraft(value);
+    }
+    const dirty = draft.trim() !== value && draft.trim() !== '';
+    return (
+        <div class="field">
+            <label for={id}>{label}</label>
+            <div class="field__control">
+                <div class="field__row">
+                    <input
+                        id={id}
+                        value={draft}
+                        autocomplete="off"
+                        disabled={saving}
+                        onInput={(event) => {
+                            setDraft(event.currentTarget.value);
+                        }}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter' && dirty) onSave(draft.trim());
+                            if (event.key === 'Escape') setDraft(value);
+                        }}
+                    />
+                    <button
+                        type="button"
+                        class="btn btn--secondary"
+                        disabled={!dirty || saving}
+                        onClick={() => {
+                            onSave(draft.trim());
+                        }}
+                    >
+                        {saving ? 'Saving' : 'Save name'}
+                    </button>
+                </div>
             </div>
         </div>
     );

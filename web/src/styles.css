@@ -1018,3 +1018,453 @@ input[type='range'] {
 .field__row input {
     max-width: 26rem;
 }
+
+/* ============================================================== M3: the bus */
+
+/*
+ * The event stream is down. Sticky under the nav rather than inline in the page: the whole point
+ * is that it is visible while the user is looking at numbers that have stopped moving.
+ */
+.banner {
+    position: sticky;
+    top: var(--control-h);
+    z-index: 1;
+    width: min(var(--page-max), 100% - 2 * var(--space-4));
+    margin: var(--space-4) auto 0;
+    box-shadow: var(--shadow-2);
+}
+
+.banner p {
+    margin-bottom: var(--space-2);
+}
+
+/*
+ * Exclusive choices — On/Off, scan depth, commissioning mode, how the dashboard is arranged. The
+ * selected one wears the same 3px edge as the current nav link and the selected network row.
+ */
+.seg {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.seg__btn {
+    min-height: var(--control-h);
+    padding: 0 var(--space-3);
+    border: 0;
+    border-bottom: var(--rail-width) solid transparent;
+    background: transparent;
+    color: var(--c-text-muted);
+    font-weight: var(--weight-medium);
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        color var(--dur-fast) var(--ease-out),
+        border-color var(--dur-fast) var(--ease-out);
+}
+
+.seg__btn:hover:not(:disabled) {
+    color: var(--c-text);
+}
+
+.seg__btn.is-current {
+    border-bottom-color: var(--c-accent);
+    color: var(--c-text);
+}
+
+.seg__btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/*
+ * The dimmer. `accent-color` is doing the work on purpose: the browser draws a filled track and a
+ * thumb that already follow the viewer's colour scheme and platform sizing, and the 44px input box
+ * is the drag target whatever size the thumb renders at. Re-cutting all four vendor pseudo-elements
+ * would buy a different grey and four more ways to break.
+ */
+.level {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.level__range {
+    flex: 1 1 6rem;
+    min-width: 0;
+    margin: 0;
+}
+
+/*
+ * The value is the loudest thing on a card: it is what gets read from the top of a ladder. Sans,
+ * not the mono face — `Off` in a monospace reads as `0ff` at a glance, and this is the one place
+ * the digits sit next to a word.
+ */
+.level__value {
+    flex: none;
+    min-width: 4rem;
+    font-size: var(--text-lg);
+    font-weight: var(--weight-medium);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+/* ------------------------------------------------------------ gear cards */
+
+.gears {
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+}
+
+.gear {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3) var(--space-3);
+    padding-left: calc(var(--space-3) + var(--rail-width));
+}
+
+/*
+ * A healthy fitting has no rail colour and no badge. 64 cards each wearing a green OK badge is
+ * confetti with extra steps; leaving them neutral is what makes the one in trouble findable.
+ */
+.gear__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.gear__name {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    min-height: var(--control-h);
+    min-width: 0;
+    overflow: hidden;
+    color: var(--c-text);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gear__name:hover {
+    color: var(--c-accent);
+    text-decoration: underline;
+}
+
+.gear__addr {
+    flex: none;
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+}
+
+.gear__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+
+.gear__note,
+.gear__error {
+    margin: 0;
+    font-size: var(--text-sm);
+}
+
+.gear__error {
+    color: var(--c-danger);
+}
+
+.gear__data {
+    margin-top: var(--space-4);
+}
+
+/*
+ * Absent: the address kept its name and its last values but answered nothing. The card sinks to
+ * the page colour instead of floating on the surface — literally less present than its neighbours —
+ * on top of the offline rail, the badge and the disabled controls.
+ */
+.gear--absent {
+    background: var(--c-bg);
+}
+
+/* The rail breaks up: present, then not. Same device, interrupted. */
+.gear--absent::before {
+    background: repeating-linear-gradient(
+        180deg,
+        var(--c-offline) 0 0.375rem,
+        transparent 0.375rem 0.75rem
+    );
+}
+
+.gear--absent .level__value {
+    color: var(--c-text-muted);
+}
+
+/* ---------------------------------------------------------------- groups */
+
+.group {
+    padding: 0;
+}
+
+.group__summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h);
+    padding: var(--space-2) var(--space-4);
+    font-weight: var(--weight-medium);
+    list-style: none;
+    cursor: pointer;
+}
+
+.group__summary::-webkit-details-marker {
+    display: none;
+}
+
+/* The only animated thing on the page, and it answers a tap. */
+.group__summary::before {
+    content: '';
+    flex: none;
+    width: 0;
+    height: 0;
+    border-top: 0.3rem solid transparent;
+    border-bottom: 0.3rem solid transparent;
+    border-left: 0.4rem solid currentColor;
+    transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.group[open] > .group__summary::before {
+    transform: rotate(90deg);
+}
+
+.group__id {
+    flex: none;
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+}
+
+.group__name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.group__count {
+    flex: none;
+    font-size: var(--text-sm);
+}
+
+.group__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: 0 var(--space-4) var(--space-4);
+}
+
+.group__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+.group__controls .level {
+    flex: 1 1 14rem;
+}
+
+/* --------------------------------------------------------- scenes, groups */
+
+.scenes {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: var(--space-4);
+}
+
+.scene {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-3);
+    border-top: var(--border);
+}
+
+.scene:first-child {
+    border-top: 0;
+}
+
+/* Same edge marker as everywhere else: this is the row that will be written. */
+.scene.is-changed {
+    box-shadow: inset var(--rail-width) 0 0 var(--c-accent);
+}
+
+.scene__id {
+    color: var(--c-text-muted);
+    font-size: var(--text-sm);
+}
+
+.scene__empty {
+    font-size: var(--text-sm);
+}
+
+input.scene__level {
+    max-width: 7rem;
+}
+
+.groups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+}
+
+.groupbox {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-h);
+    margin-bottom: 0;
+    padding: 0 var(--space-3);
+    border: var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--c-text);
+    font-size: var(--text-md);
+    cursor: pointer;
+}
+
+.groupbox.is-on {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
+}
+
+/* Unwritten parameters, in the same shape as the settings save bar but scoped to one panel. */
+.writebar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-4) 0;
+    padding: var(--space-3);
+    padding-left: calc(var(--space-3) + var(--rail-width));
+    border: var(--border);
+    border-left: var(--rail-width) solid var(--c-accent);
+    border-radius: var(--radius-md);
+    background: var(--c-raised);
+}
+
+/* ------------------------------------------------------- tables, console */
+
+.table-scroll {
+    overflow-x: auto;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+}
+
+.table th,
+.table td {
+    padding: var(--space-2) var(--space-3);
+    border-bottom: var(--border);
+    text-align: left;
+}
+
+.table th {
+    color: var(--c-text-muted);
+    font-weight: var(--weight-medium);
+}
+
+/* TX and RX are what the protocol calls them; a direction glyph would say less. */
+.console {
+    display: flex;
+    flex-direction: column;
+    margin: var(--space-4) 0 0;
+    padding: 0;
+    border: var(--border);
+    border-radius: var(--radius-md);
+    background: var(--c-raised);
+    list-style: none;
+    overflow: hidden;
+}
+
+.console__row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border-top: var(--border);
+}
+
+.console__row:first-child {
+    border-top: 0;
+}
+
+.console__line {
+    display: flex;
+    gap: var(--space-3);
+    margin: 0;
+    max-width: none;
+}
+
+.console__dir {
+    flex: none;
+    width: 2.25rem;
+    color: var(--c-text-muted);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--tracking-wide);
+    line-height: var(--leading-normal);
+}
+
+.console__dir--tx {
+    color: var(--c-accent);
+}
+
+.console__dir--rx {
+    color: var(--c-ok);
+}
+
+.console__dir--err {
+    color: var(--c-danger);
+}
+
+.console__text {
+    overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ navigation */
+
+.backlink {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--control-h);
+    font-size: var(--text-sm);
+}
+
+.tools__actions {
+    margin-top: var(--space-4);
+}
+
+.query__form {
+    margin: var(--space-4) 0;
+}
+
+.query__reply {
+    margin-top: var(--space-4);
+}

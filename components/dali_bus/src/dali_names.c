@@ -47,7 +47,7 @@ static const named_cmd_t k_queries[] = {
     {"limit_error", DALI_CMD_QUERY_LIMIT_ERROR, false},
     {"reset_state", DALI_CMD_QUERY_RESET_STATE, false},
     {"missing_short_address", DALI_CMD_QUERY_MISSING_SHORT_ADDR, false},
-    {"version", DALI_CMD_QUERY_VERSION, false},
+    {"version_number", DALI_CMD_QUERY_VERSION, false},
     {"device_type", DALI_CMD_QUERY_DEVICE_TYPE, false},
     {"next_device_type", OPCODE_QUERY_NEXT_DEVICE_TYPE, false},
     {"physical_minimum", DALI_CMD_QUERY_PHY_MIN_LEVEL, false},

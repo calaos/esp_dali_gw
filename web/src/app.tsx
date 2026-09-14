@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 
 import { api, ApiError, type Config, type Info } from './api.ts';
-import { NAV, type Route, useHashRoute } from './router.ts';
+import { retryNow, startStream, type StreamState } from './events.ts';
+import { href, NAV, type Route, useHashRoute, type View } from './router.ts';
+import { refresh, useStore } from './store.ts';
 import { About } from './views/about.tsx';
+import { Dashboard } from './views/dashboard.tsx';
+import { GearDetail } from './views/gear.tsx';
 import { Settings } from './views/settings.tsx';
 import { SetupWizard } from './views/setup.tsx';
+import { BusTools } from './views/tools.tsx';
 
 type State =
     | { phase: 'loading' }
@@ -35,8 +40,33 @@ function tone(state: State): { className: string; label: string } {
     }
 }
 
+/**
+ * The event stream is down, and which of the two reasons it is matters: a gateway that is not
+ * answering will come back on its own, a gateway that refused has three listeners already and will
+ * not come back until a person closes something.
+ */
+function StreamBanner({ stream }: { stream: StreamState }) {
+    if (stream.phase !== 'retrying' && stream.phase !== 'refused') return null;
+    const refused = stream.phase === 'refused';
+    return (
+        <div class={`banner notice ${refused ? 'is-warn' : 'is-offline'}`} role="status">
+            <strong>{refused ? 'The gateway is full' : 'Live updates stopped'}</strong>
+            <p>
+                {refused
+                    ? 'It keeps three browser connections at a time and already has three. Close this page in another tab, or on another phone, and the next attempt will get in.'
+                    : 'The gateway is not answering. Levels and status on this page are the last ones it sent.'}{' '}
+                Retrying in {stream.retryInS} s.
+            </p>
+            <button type="button" class="btn btn--secondary btn--sm" onClick={retryNow}>
+                Try now
+            </button>
+        </div>
+    );
+}
+
 export function App() {
     const [state, setState] = useState<State>({ phase: 'loading' });
+    const store = useStore();
     const hash = useHashRoute();
 
     const load = useCallback(() => {
@@ -51,15 +81,25 @@ export function App() {
 
     useEffect(load, [load]);
 
-    const { className, label } = tone(state);
     const ready = state.phase === 'ready' ? state : null;
-
-    // SPEC §5.2: the wizard is the landing page while the device has no network of its own to join,
-    // but the rest of the UI stays reachable in AP mode for on-site diagnostics.
     const provisioning =
         ready !== null && (ready.info.mode === 'ap' || ready.config.wifi.ssid === '');
-    const route: Route = hash ?? (provisioning ? 'setup' : 'about');
-    const nav = provisioning ? [{ route: 'setup' as const, label: 'Setup' }, ...NAV] : NAV;
+
+    // One stream per page, opened once the device has answered at all and never re-opened by a
+    // route change: the gateway counts listeners, not tabs (SPEC §9).
+    useEffect(() => {
+        if (ready === null || provisioning) return;
+        startStream();
+        void refresh();
+    }, [ready === null, provisioning]);
+
+    const { className, label } = tone(state);
+
+    const route: Route = hash ?? { view: provisioning ? 'setup' : 'dashboard', addr: null };
+    const nav: { view: View; label: string }[] = provisioning
+        ? [{ view: 'setup', label: 'Setup' }, ...NAV]
+        : NAV;
+    const current: View = route.view === 'gear' ? 'dashboard' : route.view;
 
     return (
         <>
@@ -76,16 +116,18 @@ export function App() {
                 <nav class="nav" aria-label="Sections">
                     {nav.map((entry) => (
                         <a
-                            key={entry.route}
-                            class={entry.route === route ? 'nav__link is-current' : 'nav__link'}
-                            href={`#/${entry.route}`}
-                            aria-current={entry.route === route ? 'page' : undefined}
+                            key={entry.view}
+                            class={entry.view === current ? 'nav__link is-current' : 'nav__link'}
+                            href={href(entry.view)}
+                            aria-current={entry.view === current ? 'page' : undefined}
                         >
                             {entry.label}
                         </a>
                     ))}
                 </nav>
             )}
+
+            {ready !== null && !provisioning && <StreamBanner stream={store.stream} />}
 
             <main class="page">
                 {state.phase === 'loading' && (
@@ -111,16 +153,23 @@ export function App() {
                     </section>
                 )}
 
-                {ready !== null && route === 'setup' && (
+                {ready !== null && route.view === 'setup' && (
                     <SetupWizard
                         config={ready.config}
                         hostname={ready.info.hostname ?? ready.config.device.hostname}
                     />
                 )}
-                {ready !== null && route === 'settings' && (
+                {ready !== null && route.view === 'dashboard' && (
+                    <Dashboard groupNames={ready.config.groups ?? {}} />
+                )}
+                {ready !== null && route.view === 'gear' && (
+                    <GearDetail addr={route.addr ?? -1} />
+                )}
+                {ready !== null && route.view === 'bus' && <BusTools />}
+                {ready !== null && route.view === 'settings' && (
                     <Settings config={ready.config} onReload={load} />
                 )}
-                {ready !== null && route === 'about' && <About info={ready.info} />}
+                {ready !== null && route.view === 'about' && <About info={ready.info} />}
             </main>
         </>
     );
