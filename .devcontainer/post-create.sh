@@ -4,16 +4,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "==> Git safe.directory (bind-mounted workspace is owned by another uid on some hosts)"
-git config --global --add safe.directory "$(pwd)" || true
-
-echo "==> ESP-IDF"
-# shellcheck disable=SC1091
-. /opt/esp/idf/export.sh >/dev/null
+echo "==> Toolchain (baked into the image by .devcontainer/Dockerfile)"
 idf.py --version
-
-echo "==> Node / web UI deps"
 node --version
+clang-format --version
+
+echo "==> Web UI deps"
 if [ -f web/package.json ]; then
   (cd web && npm ci)
 fi

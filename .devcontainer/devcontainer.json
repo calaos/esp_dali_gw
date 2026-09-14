@@ -5,7 +5,8 @@
     "context": "..",
     "args": {
       "IDF_VERSION": "v6.0.2",
-      "NODE_MAJOR": "22"
+      "NODE_MAJOR": "22",
+      "INSTALL_CLAUDE_CODE": "1"
     }
   },
   "workspaceFolder": "/workspaces/esp_dali_gw",
@@ -20,8 +21,7 @@
   "mounts": [
     "source=/dev,target=/dev,type=bind",
     "source=esp_dali_gw-ccache,target=/home/dev/.cache/ccache,type=volume",
-    "source=esp_dali_gw-node_modules,target=/workspaces/esp_dali_gw/web/node_modules,type=volume",
-    "source=esp_dali_gw-idf-tools-cache,target=/home/dev/.espressif,type=volume"
+    "source=esp_dali_gw-node_modules,target=/workspaces/esp_dali_gw/web/node_modules,type=volume"
   ],
 
   "containerEnv": {
