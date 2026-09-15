@@ -19,6 +19,17 @@ they need, so a session with a board but no bus can still clear a useful chunk.
 
 ---
 
+## Iterating without losing the configuration
+
+`write-flash 0x0 <merged>.bin` covers the whole flash, **including NVS** — every re-flash wipes the
+Wi-Fi credentials and starts provisioning again. While iterating, write only the app partition:
+
+```bash
+esptool --port /dev/ttyACM0 --baud 921600 write-flash 0x20000 build-<target>/esp_dali_gw.bin
+```
+
+Use the merged image for a first install, a recovery, or when the partition table changes.
+
 ## A. Board only
 
 - [ ] It boots, and the banner prints a version from `git describe`, not `0.0.0-nogit`.

@@ -28,8 +28,12 @@ void time_sync_start(void)
 
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     cfg.start = true;
+#if CONFIG_LWIP_DHCP_GET_NTP_SRV
+    /* Asking for the DHCP-supplied server without this built in makes the whole init fail, so the
+     * device ends up with no clock at all rather than falling back to the pool. */
     cfg.server_from_dhcp = true;
     cfg.renew_servers_after_new_IP = true;
+#endif
 
     esp_err_t err = esp_netif_sntp_init(&cfg);
     if (err != ESP_OK) {
