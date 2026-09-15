@@ -138,6 +138,20 @@ esp_err_t app_config_init(void);
 /** @brief Read-only pointer to the live configuration. Never NULL after app_config_init(). */
 const app_config_t *app_config_get(void);
 
+/**
+ * @brief Heap copy of the live configuration, for callers that need to modify one.
+ *
+ * app_config_t is over 3 KB -- larger than the main task's entire stack and most of an httpd
+ * worker's. **It must never be declared as a local.** Use this and app_config_release() instead;
+ * a stack copy overflows and corrupts whatever lies beyond, which surfaces far from the cause.
+ *
+ * @return NULL when the heap is exhausted.
+ */
+app_config_t *app_config_clone(void);
+
+/** @brief Release a copy from app_config_clone(). Safe on NULL. */
+void app_config_release(app_config_t *cfg);
+
 /** @brief Fill @p out with the compiled-in defaults, including the MAC-derived identifiers. */
 void app_config_defaults(app_config_t *out);
 

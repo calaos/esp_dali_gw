@@ -762,27 +762,36 @@ static void cmd_get_config(uint32_t id)
  */
 static void cmd_set_config(const cJSON *root, uint32_t id)
 {
-    app_config_t cfg = *app_config_get();
+    /* On the heap: the document is over 3 KB and app_config_set() needs one of its own on top,
+     * which together are more than this worker's whole stack. */
+    app_config_t *cfg = app_config_clone();
+    if (cfg == NULL) {
+        publish_result("set_config", id, false, GW_ERR_INTERNAL, "out of memory", NULL);
+        return;
+    }
     char field[64] = {0};
 
-    esp_err_t err = gw_api_config_from_json(root, &cfg, field, sizeof(field));
+    esp_err_t err = gw_api_config_from_json(root, cfg, field, sizeof(field));
     if (err != ESP_OK) {
+        app_config_release(cfg);
         publish_result("set_config", id, false, GW_ERR_INVALID_ARG,
                        field[0] ? field : "malformed document", NULL);
         return;
     }
 
-    app_config_merge_secrets(&cfg);
+    app_config_merge_secrets(cfg);
 
-    err = app_config_validate(&cfg, field, sizeof(field));
+    err = app_config_validate(cfg, field, sizeof(field));
     if (err != ESP_OK) {
+        app_config_release(cfg);
         publish_result("set_config", id, false, GW_ERR_INVALID_ARG,
                        field[0] ? field : "invalid value", NULL);
         return;
     }
 
     app_config_impact_t impact = APP_CONFIG_IMPACT_NONE;
-    err = app_config_set(&cfg, &impact);
+    err = app_config_set(cfg, &impact);
+    app_config_release(cfg);
     if (err != ESP_OK) {
         publish_result("set_config", id, false, gw_api_err_from_esp(err),
                        "could not persist configuration", NULL);

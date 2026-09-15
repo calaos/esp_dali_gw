@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -50,24 +51,33 @@ static esp_err_t store_save(const app_config_t *cfg)
 
 esp_err_t app_config_init(void)
 {
-    app_config_t loaded;
     char field[APP_CONFIG_NAME_LEN] = {0};
 
-    esp_err_t err = store_load(&loaded);
+    /* Heap, not stack: this struct is larger than the main task's whole stack. */
+    app_config_t *loaded = calloc(1, sizeof(*loaded));
+    if (loaded == NULL) {
+        app_config_defaults(&s_cfg);
+        ESP_LOGE(TAG, "out of memory loading config, using defaults");
+        return ESP_OK;
+    }
+
+    esp_err_t err = store_load(loaded);
     if (err == ESP_OK) {
-        err = app_config_migrate(&loaded);
+        err = app_config_migrate(loaded);
     }
     if (err == ESP_OK) {
-        err = app_config_validate(&loaded, field, sizeof(field));
+        err = app_config_validate(loaded, field, sizeof(field));
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "stored config rejected at '%s'", field);
         }
     }
     if (err == ESP_OK) {
-        s_cfg = loaded;
+        s_cfg = *loaded;
+        free(loaded);
         ESP_LOGI(TAG, "config loaded (schema %u)", (unsigned)s_cfg.schema);
         return ESP_OK;
     }
+    free(loaded);
 
     app_config_defaults(&s_cfg);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
@@ -95,16 +105,37 @@ esp_err_t app_config_set(const app_config_t *cfg, app_config_impact_t *impact)
     }
     ESP_RETURN_ON_ERROR(app_config_validate(cfg, NULL, 0), TAG, "invalid config");
 
-    app_config_t next = *cfg;
-    next.schema = APP_CONFIG_SCHEMA_VERSION;
-    app_config_impact_t what = app_config_diff_impact(&s_cfg, &next);
+    /* Heap again: this runs on an httpd or MQTT worker that already holds a copy of its own. */
+    app_config_t *next = calloc(1, sizeof(*next));
+    ESP_RETURN_ON_FALSE(next != NULL, ESP_ERR_NO_MEM, TAG, "no memory for config");
 
-    ESP_RETURN_ON_ERROR(store_save(&next), TAG, "persist");
-    s_cfg = next;
-    if (impact != NULL) {
-        *impact = what;
+    *next = *cfg;
+    next->schema = APP_CONFIG_SCHEMA_VERSION;
+    app_config_impact_t what = app_config_diff_impact(&s_cfg, next);
+
+    esp_err_t err = store_save(next);
+    if (err == ESP_OK) {
+        s_cfg = *next;
+        if (impact != NULL) {
+            *impact = what;
+        }
     }
-    return ESP_OK;
+    free(next);
+    return err;
+}
+
+app_config_t *app_config_clone(void)
+{
+    app_config_t *copy = malloc(sizeof(*copy));
+    if (copy != NULL) {
+        *copy = s_cfg;
+    }
+    return copy;
+}
+
+void app_config_release(app_config_t *cfg)
+{
+    free(cfg);
 }
 
 void app_config_merge_secrets(app_config_t *cfg)

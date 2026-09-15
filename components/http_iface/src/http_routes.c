@@ -43,23 +43,31 @@ esp_err_t http_route_config_get(httpd_req_t *req)
  */
 static esp_err_t apply_config(httpd_req_t *req, const cJSON *root)
 {
-    app_config_t cfg = *app_config_get();
+    /* On the heap: the document is over 3 KB and app_config_set() needs one of its own on top. */
+    app_config_t *cfg = app_config_clone();
+    if (cfg == NULL) {
+        return http_send_error(req, GW_ERR_INTERNAL, "out of memory");
+    }
     char field[64] = {0};
 
-    esp_err_t err = gw_api_config_from_json(root, &cfg, field, sizeof(field));
+    esp_err_t err = gw_api_config_from_json(root, cfg, field, sizeof(field));
     if (err != ESP_OK) {
+        app_config_release(cfg);
         return http_send_error(req, GW_ERR_INVALID_ARG, field[0] ? field : "malformed document");
     }
 
-    app_config_merge_secrets(&cfg);
+    app_config_merge_secrets(cfg);
 
-    err = app_config_validate(&cfg, field, sizeof(field));
+    err = app_config_validate(cfg, field, sizeof(field));
     if (err != ESP_OK) {
+        app_config_release(cfg);
         return http_send_error(req, GW_ERR_INVALID_ARG, field[0] ? field : "invalid value");
     }
 
     app_config_impact_t impact = APP_CONFIG_IMPACT_NONE;
-    err = app_config_set(&cfg, &impact);
+    err = app_config_set(cfg, &impact);
+    uint8_t brightness = cfg->led.brightness;
+    app_config_release(cfg);
     if (err != ESP_OK) {
         return http_send_error(req, gw_api_err_from_esp(err), "could not persist configuration");
     }
@@ -68,7 +76,7 @@ static esp_err_t apply_config(httpd_req_t *req, const cJSON *root)
     if (impact & APP_CONFIG_IMPACT_MQTT_RESTART) {
         mqtt_iface_restart();
     }
-    status_led_set_brightness(cfg.led.brightness);
+    status_led_set_brightness(brightness);
 
     cJSON *res = cJSON_CreateObject();
     if (res == NULL) {
