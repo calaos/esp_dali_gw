@@ -84,5 +84,6 @@ void app_main(void)
     /* Last: the guard needs every producer of its two conditions already running. */
     ESP_ERROR_CHECK(ota_validate_init());
 
-    ESP_LOGI(TAG, "init complete");
+    ESP_LOGI(TAG, "init complete (main task stack headroom %u B)",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }
